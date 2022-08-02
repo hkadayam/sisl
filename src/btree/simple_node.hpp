@@ -238,9 +238,9 @@ public:
         return get_nth_key(ind, false).compare(cmp_key);
     }
 
-    int compare_nth_key_range(const BtreeKeyRange& range, uint32_t ind) const override {
+    /*int compare_nth_key_range(const BtreeKeyRange& range, uint32_t ind) const override {
         return get_nth_key(ind, false).compare_range(range);
-    }
+    }*/
 
     /////////////// Other Internal Methods /////////////
     void set_nth_obj(uint32_t ind, const BtreeKey& k, const BtreeValue& v) {

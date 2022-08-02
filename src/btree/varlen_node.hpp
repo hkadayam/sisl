@@ -21,7 +21,7 @@
 #include "btree_node.hpp"
 #include "btree_kv.hpp"
 
-SISL_LOGGING_DECL(btree_generics)
+SISL_LOGGING_DECL(btree)
 
 namespace sisl {
 namespace btree {
@@ -69,7 +69,7 @@ public:
     /* Insert the key and value in provided index
      * Assumption: Node lock is already taken */
     btree_status_t insert(uint32_t ind, const BtreeKey& key, const BtreeValue& val) override {
-        LOGTRACEMOD(btree_generics, "{}:{}", key.to_string(), val.to_string());
+        LOGTRACEMOD(btree, "{}:{}", key.to_string(), val.to_string());
         auto sz = insert(ind, key.serialize(), val.serialize());
 #ifndef NDEBUG
         validate_sanity();
@@ -111,7 +111,7 @@ public:
 
     // TODO - currently we do not support variable size key
     void update(uint32_t ind, const BtreeKey& key, const BtreeValue& val) override {
-        LOGTRACEMOD(btree_generics, "Update called:{}", to_string());
+        LOGTRACEMOD(btree, "Update called:{}", to_string());
         DEBUG_ASSERT_LE(ind, this->get_total_entries());
 
         // If we are updating the edge value, none of the other logic matter. Just update edge value and move on
@@ -137,11 +137,11 @@ public:
             if (val_ptr != vblob.bytes) {
                 // TODO - we can reclaim space if new obj size is lower than cur obj size
                 // Same or smaller size update, just copy the value blob
-                LOGTRACEMOD(btree_generics, "Not an in-place update, have to copying data of size {}", vblob.size);
+                LOGTRACEMOD(btree, "Not an in-place update, have to copying data of size {}", vblob.size);
                 memcpy(val_ptr, vblob.bytes, vblob.size);
             } else {
                 // do nothing
-                LOGTRACEMOD(btree_generics, "In place update, not copying data.");
+                LOGTRACEMOD(btree, "In place update, not copying data.");
             }
             set_nth_value_len(get_nth_record_mutable(ind), vblob.size);
             get_var_node_header()->m_available_space += cur_obj_size - new_obj_size;
@@ -151,7 +151,7 @@ public:
 
         remove(ind, ind);
         insert(ind, key, val);
-        LOGTRACEMOD(btree_generics, "Size changed for either key or value. Had to delete and insert :{}", to_string());
+        LOGTRACEMOD(btree, "Size changed for either key or value. Had to delete and insert :{}", to_string());
     }
 
     // ind_s and ind_e are inclusive
@@ -427,20 +427,20 @@ public:
         return get_nth_key(ind, false).compare(cmp_key);
     }
 
-    int compare_nth_key_range(const BtreeKeyRange& range, uint32_t ind) const {
+    /*int compare_nth_key_range(const BtreeKeyRange& range, uint32_t ind) const {
         return get_nth_key(ind, false).compare_range(range);
-    }
+    }*/
 
 protected:
     uint32_t insert(uint32_t ind, const sisl::blob& key_blob, const sisl::blob& val_blob) {
         assert(ind <= this->get_total_entries());
-        LOGTRACEMOD(btree_generics, "{}:{}:{}:{}", ind, get_var_node_header()->tail_offset(), get_arena_free_space(),
+        LOGTRACEMOD(btree, "{}:{}:{}:{}", ind, get_var_node_header()->tail_offset(), get_arena_free_space(),
                     get_var_node_header()->available_space());
         uint16_t obj_size = key_blob.size + val_blob.size;
         uint16_t to_insert_size = obj_size + get_record_size();
         if (to_insert_size > get_var_node_header()->available_space()) {
-            LOGDEBUG("insert failed insert size {} available size {}", to_insert_size,
-                     get_var_node_header()->available_space());
+            LOGDEBUGMOD(btree, "insert failed insert size {} available size {}", to_insert_size,
+                        get_var_node_header()->available_space());
             return 0;
         }
 
@@ -503,7 +503,7 @@ protected:
         if (no_of_entries == 0) {
             // this happens when  there is only entry and in update, we first remove and than insert
             get_var_node_header()->m_tail_arena_offset = get_var_node_header()->m_init_available_space;
-            LOGTRACEMOD(btree_generics, "Full available size reclaimed");
+            LOGTRACEMOD(btree, "Full available size reclaimed");
             return;
         }
         std::vector< Record > rec;
@@ -552,7 +552,7 @@ protected:
 #ifndef NDEBUG
         this->validate_sanity();
 #endif
-        LOGTRACEMOD(btree_generics, "Sparse space reclaimed:{}", sparce_space);
+        LOGTRACEMOD(btree, "Sparse space reclaimed:{}", sparce_space);
     }
 
     const uint8_t* get_nth_record(uint32_t ind) const {

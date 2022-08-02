@@ -10,3 +10,9 @@ set(TEST_BTREENODE_SOURCE_FILES
    )
 add_executable(test_btree_node ${TEST_BTREENODE_SOURCE_FILES})
 target_link_libraries(test_btree_node sisl ${CONAN_LIBS})
+
+set(TEST_MEMBTREE_SOURCE_FILES
+    tests/test_mem_btree.cpp
+   )
+add_executable(test_mem_btree ${TEST_MEMBTREE_SOURCE_FILES})
+target_link_libraries(test_mem_btree sisl ${CONAN_LIBS})

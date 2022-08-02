@@ -21,3 +21,9 @@ set(TEST_RANGECACHE_SOURCE_FILES
    )
 add_executable(test_range_cache ${TEST_RANGECACHE_SOURCE_FILES})
 target_link_libraries(test_range_cache sisl ${CONAN_LIBS})
+
+set(TEST_SIMPLECACHE_SOURCE_FILES
+    tests/test_simple_cache.cpp
+   )
+add_executable(test_simple_cache ${TEST_SIMPLECACHE_SOURCE_FILES})
+target_link_libraries(test_simple_cache sisl ${CONAN_LIBS})

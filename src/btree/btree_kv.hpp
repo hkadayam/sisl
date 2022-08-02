@@ -24,16 +24,11 @@
 namespace sisl {
 namespace btree {
 
-ENUM(_MultiMatchSelector, uint16_t,
-     DO_NOT_CARE,                   // Select anything that matches
-     LEFT_MOST,                     // Select the left most one
-     RIGHT_MOST,                    // Select the right most one
-     BEST_FIT_TO_CLOSEST,           // Return the entry either same or more then the search key. If
-                                    // nothing is available then return the entry just smaller then the
-                                    // search key.
-     BEST_FIT_TO_CLOSEST_FOR_REMOVE // It is similar as BEST_FIT_TO_CLOSEST but have special
-                                    // handling for remove This code will be removed once
-                                    // range query is supported in remove
+ENUM(MultiMatchOption, uint16_t,
+     DO_NOT_CARE, // Select anything that matches
+     LEFT_MOST,   // Select the left most one
+     RIGHT_MOST,  // Select the right most one
+     MID          // Select the middle one
 )
 
 ENUM(btree_put_type, uint16_t,
@@ -48,63 +43,71 @@ class BtreeKeyRange;
 class BtreeKey {
 public:
     BtreeKey() = default;
-    // BtreeKey(const BtreeKey& other) = delete; // Deleting copy constructor forces the
-    // derived class to define its own copy constructor
+
+    // Deleting copy constructor forces the derived class to define its own copy constructor
+    // BtreeKey(const BtreeKey& other) = delete;
+    BtreeKey(const sisl::blob& b) = delete;
+
     virtual ~BtreeKey() = default;
 
     // virtual BtreeKey& operator=(const BtreeKey& other) = delete; // Deleting = overload forces the derived to
     // define its = overload
     virtual int compare(const BtreeKey& other) const = 0;
 
-    /* Applicable only for extent keys. It compare start key of (*other) with end key of (*this) */
-    virtual int compare_start(const BtreeKey& other) const { return compare(other); };
+    /* Applicable only for extent keys, so do default compare */
+    virtual int compare_head(const BtreeKey& other) const { return compare(other); };
+
     virtual int compare_range(const BtreeKeyRange& range) const = 0;
+
     virtual sisl::blob serialize() const = 0;
-
-    /* Applicable to extent keys. It doesn't copy the entire blob. Copy only the end key of the blob */
-    // virtual void copy_end_key_blob(const sisl::blob& b) { copy_blob(b); };
-
     virtual uint32_t serialized_size() const = 0;
+    // virtual void deserialize(const sisl::blob& b) = 0;
+
+    // Applicable only to extent keys, where keys have head and tail
+    virtual sisl::blob serialize_tail() const { return serialize(); }
 
     virtual std::string to_string() const = 0;
-    virtual bool is_extent_key() { return false; }
+    virtual bool is_extent_key() const { return false; }
 };
 
 class BtreeKeyRange {
-private:
-    const BtreeKey& m_start_key;
-    const BtreeKey& m_end_key;
+public:
+    const BtreeKey* m_input_start_key{nullptr};
+    const BtreeKey* m_input_end_key{nullptr};
     bool m_start_incl;
     bool m_end_incl;
-    _MultiMatchSelector m_multi_selector;
+    MultiMatchOption m_multi_selector;
 
-public:
-    BtreeKeyRange(const BtreeKey& start_key) :
-            BtreeKeyRange(start_key, true, start_key, true, _MultiMatchSelector::DO_NOT_CARE) {}
-    BtreeKeyRange(const BtreeKey& start_key, const BtreeKey& end_key) :
-            BtreeKeyRange(start_key, true, end_key, true, _MultiMatchSelector::DO_NOT_CARE) {}
-    BtreeKeyRange(const BtreeKey& start_key, bool start_incl, _MultiMatchSelector option) :
-            BtreeKeyRange(start_key, start_incl, start_key, start_incl, option) {}
-    BtreeKeyRange(const BtreeKey& start_key, bool start_incl, const BtreeKey& end_key, bool end_incl) :
-            BtreeKeyRange(start_key, start_incl, end_key, end_incl, _MultiMatchSelector::DO_NOT_CARE) {}
-    BtreeKeyRange(const BtreeKey& start_key, bool start_incl, const BtreeKey& end_key, bool end_incl,
-                  _MultiMatchSelector option) :
-            m_start_key{start_key},
-            m_end_key{end_key},
+    friend class BtreeSearchState;
+
+    template < typename K >
+    friend class BtreeKeyRangeSafe;
+
+    void set_multi_option(MultiMatchOption o) { m_multi_selector = o; }
+    virtual const BtreeKey& start_key() const { return *m_input_start_key; }
+    virtual const BtreeKey& end_key() const { return *m_input_end_key; }
+
+    virtual bool is_start_inclusive() const { return m_start_incl; }
+    virtual bool is_end_inclusive() const { return m_end_incl; }
+    virtual bool is_simple_search() const {
+        return ((m_input_start_key == m_input_end_key) && (m_start_incl == m_end_incl));
+    }
+    MultiMatchOption multi_option() const { return m_multi_selector; }
+
+private:
+    BtreeKeyRange(const BtreeKey* start_key, bool start_incl, const BtreeKey* end_key, bool end_incl,
+                  MultiMatchOption option) :
+            m_input_start_key{start_key},
+            m_input_end_key{end_key},
             m_start_incl{start_incl},
             m_end_incl{end_incl},
             m_multi_selector{option} {}
-
-    void set_selection_option(_MultiMatchSelector o) { m_multi_selector = o; }
-
-    virtual const BtreeKey& start_key() const { return m_start_key; }
-    virtual const BtreeKey& end_key() const { return m_end_key; }
-    BtreeKeyRange start_of_range() const { return BtreeKeyRange(start_key(), is_start_inclusive(), m_multi_selector); }
-    BtreeKeyRange end_of_range() const { return BtreeKeyRange(end_key(), is_end_inclusive(), m_multi_selector); }
-    virtual bool is_start_inclusive() const { return m_start_incl; }
-    virtual bool is_end_inclusive() const { return m_end_incl; }
-    virtual bool is_simple_search() const { return ((&start_key() == &end_key()) && (m_start_incl == m_end_incl)); }
-    _MultiMatchSelector selection_option() const { return m_multi_selector; }
+    BtreeKeyRange(const BtreeKey* start_key, bool start_incl, MultiMatchOption option) :
+            m_input_start_key{start_key},
+            m_input_end_key{start_key},
+            m_start_incl{start_incl},
+            m_end_incl{start_incl},
+            m_multi_selector{option} {}
 };
 
 /* This type is for keys which is range in itself i.e each key is having its own
@@ -114,14 +117,14 @@ class ExtentBtreeKey : public BtreeKey {
 public:
     ExtentBtreeKey() = default;
     virtual ~ExtentBtreeKey() = default;
-    virtual bool is_extent_key() { return true; }
+    virtual bool is_extent_key() const { return true; }
     virtual int compare_end(const BtreeKey& other) const = 0;
-    virtual int compare_start(const BtreeKey& other) const override = 0;
+    virtual int compare_start(const BtreeKey& other) const = 0;
 
     virtual bool preceeds(const BtreeKey& other) const = 0;
     virtual bool succeeds(const BtreeKey& other) const = 0;
 
-    // virtual void copy_end_key_blob(const sisl::blob& b) override = 0;
+    virtual sisl::blob serialize_tail() const override = 0;
 
     /* we always compare the end key in case of extent */
     virtual int compare(const BtreeKey& other) const override { return (compare_end(other)); }
@@ -155,5 +158,118 @@ public:
 
     virtual std::string to_string() const { return ""; }
 };
+
+template < typename K >
+class BtreeKeyRangeSafe : public BtreeKeyRange {
+private:
+    const K m_actual_start_key;
+    const K m_actual_end_key;
+
+public:
+    BtreeKeyRangeSafe(const BtreeKey& start_key) :
+            BtreeKeyRange(&m_actual_start_key, true, &m_actual_start_key, true, MultiMatchOption::DO_NOT_CARE),
+            m_actual_start_key{start_key} {}
+
+    BtreeKeyRangeSafe(const BtreeKey& start_key, const BtreeKey& end_key) :
+            BtreeKeyRangeSafe(start_key, true, end_key, true) {}
+
+    BtreeKeyRangeSafe(const BtreeKey& start_key, bool start_incl, const BtreeKey& end_key, bool end_incl,
+                      MultiMatchOption option = MultiMatchOption::DO_NOT_CARE) :
+            BtreeKeyRange(&m_actual_start_key, start_incl, &m_actual_end_key, end_incl, option),
+            m_actual_start_key{start_key},
+            m_actual_end_key{end_key} {}
+
+    /******************* all functions are constant *************/
+    BtreeKeyRangeSafe< K > start_of_range() const {
+        return BtreeKeyRangeSafe< K >(start_key(), is_start_inclusive(), multi_option());
+    }
+    BtreeKeyRangeSafe< K > end_of_range() const {
+        return BtreeKeyRangeSafe< K >(end_key(), is_end_inclusive(), multi_option());
+    }
+};
+
+struct BtreeLockTracker;
+struct BtreeQueryCursor {
+    std::unique_ptr< BtreeKey > m_last_key;
+    std::unique_ptr< BtreeLockTracker > m_locked_nodes;
+    BtreeQueryCursor() = default;
+
+    const sisl::blob serialize() const { return m_last_key ? m_last_key->serialize() : sisl::blob{}; };
+    virtual std::string to_string() const { return (m_last_key) ? m_last_key->to_string() : "null"; }
+};
+
+// This class holds the current state of the search. This is where intermediate search state are stored
+// and it is mutated by the do_put and do_query methods. Expect the current_sub_range and cursor to keep
+// getting updated on calls.
+class BtreeSearchState {
+protected:
+    const BtreeKeyRange m_input_range;
+    BtreeKeyRange m_current_sub_range;
+    BtreeQueryCursor* m_cursor{nullptr};
+
+public:
+    BtreeSearchState(BtreeKeyRange&& inp_range, BtreeQueryCursor* cur = nullptr) :
+            m_input_range(std::move(inp_range)), m_current_sub_range{m_input_range}, m_cursor{cur} {}
+
+    const BtreeQueryCursor* const_cursor() const { return m_cursor; }
+    BtreeQueryCursor* cursor() { return m_cursor; }
+    void set_cursor(BtreeQueryCursor* cur) { m_cursor = cur; }
+    void reset_cursor() { set_cursor(nullptr); }
+    bool is_cursor_valid() const { return (m_cursor != nullptr); }
+
+    template < typename K >
+    void set_cursor_key(const BtreeKey& end_key) {
+        if (!m_cursor) {
+            /* no need to set cursor as user doesn't want to keep track of it */
+            return;
+        }
+        m_cursor->m_last_key = std::make_unique< K >(end_key);
+    }
+
+    const BtreeKeyRange& input_range() const { return m_input_range; }
+    const BtreeKeyRange& current_sub_range() const { return m_current_sub_range; }
+    void set_current_sub_range(const BtreeKeyRange& new_sub_range) { m_current_sub_range = new_sub_range; }
+    const BtreeKey& next_key() const {
+        return (m_cursor && m_cursor->m_last_key) ? *m_cursor->m_last_key : m_input_range.start_key();
+    }
+
+#if 0
+    template < typename K >
+    BtreeKeyRangeSafe< K > next_start_range() const {
+        return BtreeKeyRangeSafe< K >(next_key(), is_start_inclusive(), m_input_range.multi_option());
+    }
+
+    template < typename K >
+    BtreeKeyRangeSafe< K > end_of_range() const {
+        return BtreeKeyRangeSafe< K >(m_input_range.end_key(), is_end_inclusive(), m_input_range.multi_option());
+    }
+#endif
+
+    BtreeKeyRange next_start_range() const {
+        return BtreeKeyRange(&next_key(), is_start_inclusive(), m_input_range.multi_option());
+    }
+
+    BtreeKeyRange end_of_range() const {
+        return BtreeKeyRange(&m_input_range.end_key(), is_end_inclusive(), m_input_range.multi_option());
+    }
+
+    BtreeKeyRange next_range() const {
+        return BtreeKeyRange(&next_key(), is_start_inclusive(), &m_input_range.end_key(), is_end_inclusive(),
+                             m_input_range.multi_option());
+    }
+
+private:
+    bool is_start_inclusive() const {
+        if (m_cursor && m_cursor->m_last_key) {
+            // cursor always have the last key not included
+            return false;
+        } else {
+            return m_input_range.is_start_inclusive();
+        }
+    }
+
+    bool is_end_inclusive() const { return m_input_range.is_end_inclusive(); }
+};
+
 } // namespace btree
 } // namespace sisl

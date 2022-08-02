@@ -43,7 +43,7 @@ struct transient_hdr_t {
 
     /* these variables are accessed without taking lock and are not expected to change after init */
     uint8_t is_leaf_node{0};
-    btree_store_type store_type{btree_store_type::MEM};
+    // btree_store_type store_type{btree_store_type::MEM};
 
 #ifndef NDEBUG
     int is_lock{-1};
@@ -130,11 +130,11 @@ public:
     }
     virtual ~BtreeNode() = default;
 
-    node_find_result_t find(const BtreeKeyRange& range, K* outkey, V* outval, bool copy_key, bool copy_val) const {
+    node_find_result_t find(const BtreeKey& key, V* outval, bool copy_val) const {
         LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}",
                          get_persistent_header_const()->to_string());
 
-        auto [found, idx] = bsearch_node(range);
+        auto [found, idx] = bsearch_node(key);
         if (idx == get_total_entries() && !has_valid_edge()) {
             DEBUG_ASSERT_EQ(found, false);
             return std::make_pair(found, idx);
@@ -145,13 +145,8 @@ public:
             if (is_leaf()) { return std::make_pair(found, idx); /* Leaf doesn't have any elements */ }
         }
 
-        if (outval) { *outval = get(idx, copy_val /* copy */); }
-        if (outkey) { *outkey = get_nth_key(idx, copy_key /* copy */); }
+        if (outval) { *outval = get(idx, copy_val); }
         return std::make_pair(found, idx);
-    }
-
-    node_find_result_t find(const BtreeKey& find_key, V* outval, bool copy_val) const {
-        return find(BtreeKeyRange(find_key), nullptr, outval, false, copy_val);
     }
 
     uint32_t get_all(const BtreeKeyRange& range, uint32_t max_count, uint32_t& start_ind, uint32_t& end_ind,
@@ -161,12 +156,9 @@ public:
         auto count = 0U;
 
         // Get the start index of the search range.
-        BtreeKeyRange sr = range.start_of_range();
-        sr.set_selection_option(_MultiMatchSelector::DO_NOT_CARE);
-        const auto [sfound, sind] = bsearch_node(sr); // doing bsearch only based on start key
-        // at this point start index will point to exact found or element after that
-        start_ind = sind;
+        const auto [sfound, sind] = bsearch_node(range.start_key());
 
+        start_ind = sind;
         if (!range.is_start_inclusive()) {
             if (start_ind < get_total_entries()) {
                 /* start is not inclusive so increment the start_ind if it is same as this key */
@@ -184,16 +176,14 @@ public:
         DEBUG_ASSERT((start_ind < get_total_entries()) || has_valid_edge(), "Invalid node");
 
         // search by the end index
-        BtreeKeyRange er = range.end_of_range();
-        er.set_selection_option(_MultiMatchSelector::DO_NOT_CARE);
-        const auto [efound, eind] = bsearch_node(er); // doing bsearch only based on end key
+        const auto [efound, eind] = bsearch_node(range.end_key());
         end_ind = eind;
 
         if (end_ind == get_total_entries() && !has_valid_edge()) { --end_ind; }
         if (is_leaf()) {
             /* Decrement the end indx if range doesn't overlap with the start of key at end indx */
             K key = get_nth_key(end_ind, false);
-            if ((range.start_key().compare_start(key) < 0) && ((range.end_key().compare_start(key)) < 0)) {
+            if ((range.start_key().compare(key) < 0) && ((range.end_key().compare(key)) < 0)) {
                 if (start_ind == end_ind) { return 0; /* no match */ }
                 --end_ind;
             }
@@ -217,6 +207,57 @@ public:
             }
         }
         return count;
+    }
+
+    std::pair< bool, uint32_t > get_any(const BtreeKeyRange& range, K* out_key, V* out_val, bool copy_key,
+                                        bool copy_val) const {
+        LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}",
+                         get_persistent_header_const()->to_string());
+        uint32_t result_idx;
+        const auto mm_opt = range.multi_option();
+        bool efound;
+        uint32_t end_idx;
+
+        // Get the start index of the search range.
+        auto [sfound, start_idx] = bsearch_node(range.start_key());
+        if (sfound && !range.is_start_inclusive()) {
+            ++start_idx;
+            sfound = false;
+        }
+
+        if (sfound && ((mm_opt == MultiMatchOption::DO_NOT_CARE) || (mm_opt == MultiMatchOption::LEFT_MOST))) {
+            result_idx = start_idx;
+            goto found_result;
+        } else if (start_idx == get_total_entries()) {
+            DEBUG_ASSERT(is_leaf() || has_valid_edge(), "Invalid node");
+            return std::make_pair(false, 0); // out_of_range
+        }
+
+        std::tie(efound, end_idx) = bsearch_node(range.end_key());
+        if (efound && !range.is_end_inclusive()) {
+            if (end_idx == 0) { return std::make_pair(false, 0); }
+            --end_idx;
+            efound = false;
+        }
+
+        if (end_idx > start_idx) {
+            if (mm_opt == MultiMatchOption::RIGHT_MOST) {
+                result_idx = end_idx;
+            } else if (mm_opt == MultiMatchOption::MID) {
+                result_idx = (end_idx - start_idx) / 2;
+            } else {
+                result_idx = start_idx;
+            }
+        } else if ((start_idx == end_idx) && ((sfound || efound))) {
+            result_idx = start_idx;
+        } else {
+            return std::make_pair(false, 0);
+        }
+
+    found_result:
+        if (out_key) { *out_key = get_nth_key(result_idx, copy_key); }
+        if (out_val) { *out_val = get_nth_value(result_idx, copy_val); }
+        return std::make_pair(true, result_idx);
     }
 
     bool put(const BtreeKey& key, const BtreeValue& val, btree_put_type put_type, V* existing_val) {
@@ -257,22 +298,34 @@ public:
         return btree_status_t::success;
     }
 
-    virtual bool remove_one(const BtreeKeyRange& range, K* outkey, V* outval) {
-        const auto [found, idx] = find(range, outkey, outval, true, true);
-        if (!found) { return false; }
-        remove(idx);
-        LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "{}", get_persistent_header_const()->to_string());
-        return true;
+    virtual bool remove_one(const BtreeKey& key, K* outkey, V* outval) {
+        const auto [found, idx] = find(key, outval, true);
+        if (found) {
+            if (outkey) { *outkey = get_nth_key(idx, true); }
+            remove(idx);
+            LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "{}", get_persistent_header_const()->to_string());
+        }
+        return found;
+    }
+
+    virtual bool remove_any(const BtreeKeyRange& range, K* outkey, V* outval) {
+        const auto [found, idx] = get_any(range, outkey, outval, true, true);
+        if (found) {
+            remove(idx);
+            LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "{}", get_persistent_header_const()->to_string());
+        }
+        return found;
     }
 
     /* Update the key and value pair and after update if outkey and outval are non-nullptr, it fills them with
      * the key and value it just updated respectively */
-    virtual bool update_one(const BtreeKey& key, const BtreeValue& val, K* outkey, V* outval) {
-        const auto [found, idx] = find(key, outkey, outval, true, true);
-        if (!found) { return false; }
-        update(idx, val);
-        LOGMSG_ASSERT((get_magic() == BTREE_NODE_MAGIC), "{}", get_persistent_header_const()->to_string());
-        return true;
+    virtual bool update_one(const BtreeKey& key, const BtreeValue& val, V* outval) {
+        const auto [found, idx] = find(key, outval, true);
+        if (found) {
+            update(idx, val);
+            LOGMSG_ASSERT((get_magic() == BTREE_NODE_MAGIC), "{}", get_persistent_header_const()->to_string());
+        }
+        return found;
     }
 
     void get_adjacent_indicies(uint32_t cur_ind, std::vector< uint32_t >& indices_list, uint32_t max_indices) const {
@@ -300,7 +353,7 @@ public:
         }
     }
 
-    std::tuple< K, bool, K, bool > get_subrange(const BtreeKeyRange& inp_range, int upto_ind) const {
+    BtreeKeyRange get_subrange(const BtreeKeyRange& inp_range, int upto_ind) const {
 #ifndef NDEBUG
         if (upto_ind > 0) {
             /* start of input range should always be more then the key in curr_ind - 1 */
@@ -329,10 +382,9 @@ public:
             end_inc = inp_range.is_end_inclusive();
         }
 
-        auto subrange = std::make_tuple(K{inp_range.start_key().serialize(), true}, inp_range.is_start_inclusive(),
-                                        K{end_key.serialize(), true}, end_inc);
-        RELEASE_ASSERT_LE(std::get< 0 >(subrange).compare(std::get< 3 >(subrange)), 0, "[node={}]", to_string());
-        RELEASE_ASSERT_LE(std::get< 0 >(subrange).compare(inp_range.end_key()), 0, "[node={}]", to_string());
+        BtreeKeyRangeSafe< K > subrange{inp_range.start_key(), inp_range.is_start_inclusive(), end_key, end_inc};
+        RELEASE_ASSERT_LE(subrange.start_key().compare(subrange.end_key()), 0, "[node={}]", to_string());
+        RELEASE_ASSERT_LE(subrange.start_key().compare(inp_range.end_key()), 0, "[node={}]", to_string());
         return subrange;
     }
 
@@ -383,7 +435,6 @@ protected:
 
     virtual uint32_t get_nth_obj_size(uint32_t ind) const = 0;
     virtual int compare_nth_key(const BtreeKey& cmp_key, uint32_t ind) const = 0;
-    virtual int compare_nth_key_range(const BtreeKeyRange& range, uint32_t ind) const = 0;
 
 protected:
     persistent_hdr_t* get_persistent_header() { return r_cast< persistent_hdr_t* >(m_phys_node_buf); }
@@ -461,7 +512,7 @@ protected:
         return (get_occupied_size(cfg) < get_suggested_min_size(cfg));
     }
 
-    bnodeid_t get_next_bnode() const { return get_persistent_header_const()->next_node; }
+    bnodeid_t next_bnode() const { return get_persistent_header_const()->next_node; }
     void set_next_bnode(bnodeid_t b) { get_persistent_header()->next_node = b; }
 
     bnodeid_t get_edge_id() const { return get_persistent_header_const()->edge_entry; }
@@ -481,55 +532,28 @@ protected:
     void invalidate_edge() { set_edge_id(empty_bnodeid); }
 
 private:
-    node_find_result_t bsearch_node(const BtreeKeyRange& range) const {
+    node_find_result_t bsearch_node(const BtreeKey& key) const {
         DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
-        auto [found, idx] = bsearch(-1, get_total_entries(), range);
+        auto [found, idx] = bsearch(-1, get_total_entries(), key);
         if (found) { DEBUG_ASSERT_LT(idx, get_total_entries()); }
-
-        /* BEST_FIT_TO_CLOSEST is used by remove only. Remove doesn't support range_remove. Until
-         * then we have the special logic :
-         */
-        if (range.selection_option() == _MultiMatchSelector::BEST_FIT_TO_CLOSEST_FOR_REMOVE) {
-            if (!found && is_leaf()) {
-                if (get_total_entries() != 0) {
-                    idx = get_total_entries() - 1;
-                    found = true;
-                }
-            }
-        }
 
         return std::make_pair(found, idx);
     }
 
-    node_find_result_t bsearch(int start, int end, const BtreeKeyRange& range) const {
+    node_find_result_t bsearch(int start, int end, const BtreeKey& key) const {
         int mid = 0;
-        int min_ind_found = INT32_MAX;
-        int max_ind_found = 0;
-
         bool found{false};
         uint32_t end_of_search_index{0};
-        if ((end - start) <= 1) { return std::make_pair(found, end_of_search_index); }
-        const auto selection = is_bsearch_left_or_right_most(range);
 
+        if ((end - start) <= 1) { return std::make_pair(found, end_of_search_index); }
         while ((end - start) > 1) {
             mid = start + (end - start) / 2;
             DEBUG_ASSERT(mid >= 0 && mid < int_cast(get_total_entries()), "Invalid mid={}", mid);
-            int x =
-                range.is_simple_search() ? compare_nth_key(range.start_key(), mid) : compare_nth_key_range(range, mid);
+            int x = compare_nth_key(key, mid);
             if (x == 0) {
                 found = true;
-                if (selection == _MultiMatchSelector::DO_NOT_CARE) {
-                    end = mid;
-                    break;
-                } else if (selection == _MultiMatchSelector::LEFT_MOST) {
-                    if (mid < min_ind_found) { min_ind_found = mid; }
-                    end = mid;
-                } else if (selection == _MultiMatchSelector::RIGHT_MOST) {
-                    if (mid > max_ind_found) { max_ind_found = mid; }
-                    start = mid;
-                } else {
-                    DEBUG_ASSERT(false, "Invalid MatchSelector={}", enum_name(selection));
-                }
+                end = mid;
+                break;
             } else if (x > 0) {
                 end = mid;
             } else {
@@ -537,33 +561,7 @@ private:
             }
         }
 
-        if (found) {
-            if (selection == _MultiMatchSelector::LEFT_MOST) {
-                DEBUG_ASSERT_NE(min_ind_found, INT32_MAX);
-                end_of_search_index = min_ind_found;
-            } else if (selection == _MultiMatchSelector::RIGHT_MOST) {
-                DEBUG_ASSERT_NE(max_ind_found, INT32_MAX);
-                end_of_search_index = max_ind_found;
-            } else {
-                end_of_search_index = end;
-            }
-        } else {
-            end_of_search_index = end;
-        }
-        return std::make_pair(found, end_of_search_index);
-    }
-
-    _MultiMatchSelector is_bsearch_left_or_right_most(const BtreeKeyRange& range) const {
-        auto selection = range.selection_option();
-        if (range.is_simple_search()) { return (_MultiMatchSelector::DO_NOT_CARE); }
-        if (selection == _MultiMatchSelector::LEFT_MOST) {
-            return (_MultiMatchSelector::LEFT_MOST);
-        } else if (selection == _MultiMatchSelector::RIGHT_MOST) {
-            return (_MultiMatchSelector::RIGHT_MOST);
-        } else if (selection == _MultiMatchSelector::BEST_FIT_TO_CLOSEST_FOR_REMOVE) {
-            return (_MultiMatchSelector::LEFT_MOST);
-        }
-        return (_MultiMatchSelector::DO_NOT_CARE);
+        return std::make_pair(found, end);
     }
 };
 } // namespace btree
