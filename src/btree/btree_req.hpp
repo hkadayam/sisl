@@ -36,11 +36,8 @@ public:
     const BtreeKey& next_key() const { return m_search_state.next_key(); }
 
 protected:
-    BtreeRangeRequest(const BtreeSearchState& search_state, void* app_context = nullptr,
-                      uint32_t batch_size = UINT32_MAX) :
-            BtreeRequest{app_context, nullptr}, m_search_state{search_state}, m_batch_size{UINT32_MAX} {
-        // LOGINFO("Inside BtreeRangeRequest constructor");
-    }
+    BtreeRangeRequest(BtreeSearchState&& search_state, void* app_context = nullptr, uint32_t batch_size = UINT32_MAX) :
+            BtreeRequest{app_context, nullptr}, m_search_state{std::move(search_state)}, m_batch_size{batch_size} {}
 
 private:
     BtreeSearchState m_search_state;
@@ -196,17 +193,18 @@ ENUM(BtreeQueryType, uint8_t,
 struct BtreeQueryRequest : public BtreeRangeRequest {
 public:
     /* TODO :- uint32_max to c++. pass reference */
-    BtreeQueryRequest(const BtreeSearchState& search_state,
+    BtreeQueryRequest(BtreeSearchState&& search_state,
                       BtreeQueryType query_type = BtreeQueryType::SWEEP_NON_INTRUSIVE_PAGINATION_QUERY,
                       uint32_t batch_size = UINT32_MAX, void* app_context = nullptr) :
-            BtreeRangeRequest(search_state, app_context, batch_size), m_query_type{query_type} {}
+            BtreeRangeRequest(std::move(search_state), app_context, batch_size), m_query_type{query_type} {}
     ~BtreeQueryRequest() = default;
 
     // virtual bool is_serializable() const = 0;
     BtreeQueryType query_type() const { return m_query_type; }
 
 protected:
-    const BtreeQueryType m_query_type; // Type of the query
+    const BtreeQueryType m_query_type;                           // Type of the query
+    const std::unique_ptr< BtreeQueryCursor > m_paginated_query; // Is it a paginated query
 };
 
 /* This class is a top level class to keep track of the locks that are held currently. It is

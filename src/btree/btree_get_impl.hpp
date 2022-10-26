@@ -6,7 +6,6 @@ namespace btree {
 template < typename K, typename V >
 btree_status_t Btree< K, V >::do_get(const BtreeNodePtr< K >& my_node, BtreeGetRequest& greq) const {
     btree_status_t ret = btree_status_t::success;
-    bool is_child_lock = false;
     locktype_t child_locktype;
 
     if (my_node->is_leaf()) {

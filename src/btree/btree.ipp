@@ -21,6 +21,8 @@
 #include "btree_node_mgr.ipp"
 #include "btree_mutate_impl.ipp"
 #include "btree_query_impl.ipp"
+#include "btree_get_impl.hpp"
+#include "btree_remove_impl.ipp"
 #include "btree/btree_node.hpp"
 
 SISL_LOGGING_DECL(btree)
@@ -143,7 +145,6 @@ out:
 template < typename K, typename V >
 btree_status_t Btree< K, V >::get(BtreeGetRequest& greq) const {
     btree_status_t ret = btree_status_t::success;
-    bool is_found;
 
     m_btree_lock.lock_shared();
     BtreeNodePtr< K > root;

@@ -6,12 +6,10 @@
 #include <array>
 #include "../btree_kv.hpp"
 
-static constexpr uint32_t g_max_keys{6000};
 static constexpr uint32_t g_max_keysize{120};
 static constexpr uint32_t g_max_valsize{120};
 static std::random_device g_rd{};
 static std::default_random_engine g_re{g_rd()};
-static std::uniform_int_distribution< uint32_t > g_randkey_generator{0, g_max_keys};
 static std::uniform_int_distribution< uint32_t > g_randkeysize_generator{2, g_max_keysize};
 static std::uniform_int_distribution< uint32_t > g_randval_generator{1, 30000};
 static std::uniform_int_distribution< uint32_t > g_randvalsize_generator{2, g_max_valsize};
