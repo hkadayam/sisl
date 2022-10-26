@@ -57,7 +57,18 @@ private:
     }
 
     void swap_node(const BtreeNodePtr< K >& node1, const BtreeNodePtr< K >& node2, void* context) override {
+        const bnodeid_t id1 = node1->get_node_id();
+        const bnodeid_t id2 = node2->get_node_id();
+        const auto gen1 = node1->get_gen();
+        const auto gen2 = node2->get_gen();
+
         std::swap(node1->m_phys_node_buf, node2->m_phys_node_buf);
+        node1->set_node_id(id1);
+        node1->set_gen(gen1);
+        node1->inc_gen(); // we are incrementing the gen since contents are changed.
+        node2->set_node_id(id2);
+        node2->set_gen(gen2);
+        node2->inc_gen(); // we are incrementing the gen since contents are changed.
     }
 
     btree_status_t refresh_node(const BtreeNodePtr< K >& bn, bool is_write_modifiable, void* context) const override {

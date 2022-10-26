@@ -30,11 +30,11 @@ btree_status_t Btree< K, V >::do_sweep_query(BtreeNodePtr< K >& my_node, BtreeQu
                 my_node->get_all(qreq.next_range(), qreq.batch_size() - count, start_ind, end_ind, &s_match_kvs);
             if (cur_count == 0) {
                 if (my_node->get_last_key().compare(qreq.input_range().end_key()) >= 0) {
-                    // we've covered all lba range, we are done now;
+                    // we've covered all key range, we are done now;
                     break;
                 }
             } else {
-                // fall through to visit siblings if we haven't covered lba range yet;
+                // fall through to visit siblings if we haven't covered key range yet;
                 if (m_bt_cfg.is_custom_kv()) {
                     static thread_local std::vector< std::pair< K, V > > s_result_kvs;
                     s_result_kvs.clear();

@@ -119,14 +119,11 @@ public:
                          get_persistent_header_const()->to_string());
 
         auto [found, idx] = bsearch_node(key);
-        if (idx == get_total_entries() && !has_valid_edge()) {
-            DEBUG_ASSERT_EQ(found, false);
-            return std::make_pair(found, idx);
-        }
-
-        if (get_total_entries() == 0) {
-            DEBUG_ASSERT((has_valid_edge() || is_leaf()), "Invalid node");
-            if (is_leaf()) { return std::make_pair(found, idx); /* Leaf doesn't have any elements */ }
+        if (idx == get_total_entries()) {
+            if (!has_valid_edge() || is_leaf()) {
+                DEBUG_ASSERT_EQ(found, false);
+                return std::make_pair(found, idx);
+            }
             if (outval) { *((BtreeNodeInfo*)outval) = get_edge_value(); }
         } else {
             if (outval) { get_nth_value(idx, outval, copy_val); }

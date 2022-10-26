@@ -287,7 +287,7 @@ public:
 
     void set_nth_value(uint32_t ind, const BtreeValue& v) {
         sisl::blob b = v.serialize();
-        if (ind > this->get_total_entries()) {
+        if (ind >= this->get_total_entries()) {
             RELEASE_ASSERT_EQ(this->is_leaf(), false, "setting value outside bounds on leaf node");
             DEBUG_ASSERT_EQ(b.size, sizeof(bnodeid_t), "Invalid value size being set for non-leaf node");
             this->set_edge_id(*r_cast< bnodeid_t* >(b.bytes));

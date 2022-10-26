@@ -232,18 +232,18 @@ class BtreeSearchState {
 protected:
     const BtreeKeyRange m_input_range;
     BtreeKeyRange m_current_sub_range;
-    BtreeQueryCursor* m_cursor{nullptr};
+    std::unique_ptr< BtreeQueryCursor > m_cursor;
 
 public:
-    BtreeSearchState(const BtreeKeyRange& inp_range, BtreeQueryCursor* cur = nullptr) :
-            m_input_range{inp_range}, m_current_sub_range{m_input_range}, m_cursor{cur} {}
+    BtreeSearchState(const BtreeKeyRange& inp_range, bool paginated_query = false) :
+            m_input_range{inp_range}, m_current_sub_range{m_input_range} {
+        if (paginated_query) { m_cursor = std::make_unique< BtreeQueryCursor >(); }
+    }
     BtreeSearchState(const BtreeSearchState& other) = default;
     BtreeSearchState(BtreeSearchState&& other) = default;
 
-    const BtreeQueryCursor* const_cursor() const { return m_cursor; }
-    BtreeQueryCursor* cursor() { return m_cursor; }
-    void set_cursor(BtreeQueryCursor* cur) { m_cursor = cur; }
-    void reset_cursor() { set_cursor(nullptr); }
+    const BtreeQueryCursor* const_cursor() const { return m_cursor.get(); }
+    BtreeQueryCursor* cursor() { return m_cursor.get(); }
     bool is_cursor_valid() const { return (m_cursor != nullptr); }
 
     template < typename K >

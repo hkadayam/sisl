@@ -16,9 +16,11 @@ btree_status_t Btree< K, V >::do_remove(const BtreeNodePtr< K >& my_node, lockty
         bool is_found;
 
         if (is_remove_any_request(rreq)) {
-            is_found = my_node->remove_any(rreq.m_range, rreq.m_outkey.get(), rreq.m_outval.get());
+            auto& rareq = to_remove_any_req(rreq);
+            is_found = my_node->remove_any(rareq.m_range, rareq.m_outkey.get(), rareq.m_outval.get());
         } else {
-            is_found = my_node->remove_one(rreq.key(), rreq.m_outkey.get(), rreq.m_outval.get());
+            auto& rsreq = to_single_remove_req(rreq);
+            is_found = my_node->remove_one(rsreq.key(), nullptr, rsreq.m_outval.get());
         }
 #ifndef NDEBUG
         my_node->validate_key_order();
@@ -39,6 +41,7 @@ retry:
 
     // TODO: Range Delete support needs to be added here
     // Get the childPtr for given key.
+    BtreeNodeInfo child_info;
     if (is_remove_any_request(rreq)) {
         std::tie(found, ind) = my_node->find(to_remove_any_req(rreq).m_range.start_key(), &child_info, true);
     } else {
@@ -47,7 +50,6 @@ retry:
 
     ASSERT_IS_VALID_INTERIOR_CHILD_INDX(found, ind, my_node);
 
-    BtreeNodeInfo child_info;
     BtreeNodePtr< K > child_node;
     ret = get_child_and_lock_node(my_node, ind, child_info, child_node, locktype_t::READ, locktype_t::WRITE);
     if (ret != btree_status_t::success) {
@@ -66,11 +68,10 @@ retry:
         }
         BT_NODE_DBG_ASSERT_EQ(curlock, locktype_t::WRITE, my_node);
 
-        uint32_t node_end_indx =
-            my_node->has_valid_edge() ? my_node->get_total_entries() : my_node->get_total_entries() - 1;
-        uint32_t end_ind = (ind + HS_DYNAMIC_CONFIG(btree->max_nodes_to_rebalance)) < node_end_indx
-            ? (ind + HS_DYNAMIC_CONFIG(btree->max_nodes_to_rebalance))
-            : node_end_indx;
+        uint32_t node_end_indx = my_node->get_total_entries();
+        if (!my_node->has_valid_edge()) { --node_end_indx; }
+
+        uint32_t end_ind = std::min((ind + m_bt_cfg.m_rebalance_max_nodes), node_end_indx);
         if (end_ind > ind) {
             // It is safe to unlock child without upgrade, because child node would not be deleted, since its
             // parent (myNode) is being write locked by this thread. In fact upgrading would be a problem, since
@@ -184,7 +185,7 @@ btree_status_t Btree< K, V >::merge_nodes(const BtreeNodePtr< K >& parent_node, 
         parent_node->get(indx, &child_info, false /* copy */);
 
         BtreeNodePtr< K > child;
-        ret = read_and_lock_node(child_info.bnode_id(), child, locktype_t::WRITE, locktype_t::WRITE, bcp);
+        ret = read_and_lock_node(child_info.bnode_id(), child, locktype_t::WRITE, locktype_t::WRITE, context);
         if (ret != btree_status_t::success) { goto out; }
         BT_NODE_LOG_ASSERT_EQ(child->is_valid_node(), true, child);
 
@@ -244,8 +245,7 @@ btree_status_t Btree< K, V >::merge_nodes(const BtreeNodePtr< K >& parent_node, 
         }
 
         /* update the last key of merge node in parent node */
-        K last_ckey; // last key in child
-        merge_node->get_last_key(&last_ckey);
+        last_ckey = merge_node->get_last_key(); // last key in child
         BtreeNodeInfo ninfo(merge_node->get_node_id());
         parent_node->update(parent_insert_indx, last_ckey, ninfo);
         ++parent_insert_indx;
@@ -259,9 +259,9 @@ btree_status_t Btree< K, V >::merge_nodes(const BtreeNodePtr< K >& parent_node, 
     }
 
     /* update the latest merge node */
-    merge_node->get_last_key(&last_ckey);
+    last_ckey = merge_node->get_last_key();
     if (last_pkey_valid) {
-        BT_DBG_ASSERT_CMP(last_ckey.compare(&last_pkey), <=, 0, parent_node);
+        BT_DBG_ASSERT_LE(last_ckey.compare(last_pkey), 0, parent_node);
         last_ckey = last_pkey;
     }
 
@@ -282,8 +282,7 @@ btree_status_t Btree< K, V >::merge_nodes(const BtreeNodePtr< K >& parent_node, 
         BT_NODE_REL_ASSERT_EQ(start_indx, (parent_insert_indx - 1), parent_node, "it should be last index");
     }
 
-    merge_node_precommit(false, parent_node, parent_merge_start_idx, left_most_node, &old_nodes, &replace_nodes,
-                         context);
+    merge_node_precommit(false, parent_node, parent_insert_indx, left_most_node, &old_nodes, &replace_nodes, context);
 
 #if 0
     /* write the journal entry */
@@ -319,22 +318,22 @@ btree_status_t Btree< K, V >::merge_nodes(const BtreeNodePtr< K >& parent_node, 
 
     if (replace_nodes.size() > 0) {
         /* write the right most node */
-        write_node(replace_nodes[replace_nodes.size() - 1], nullptr, bcp);
+        write_node(replace_nodes[replace_nodes.size() - 1], nullptr, context);
         if (replace_nodes.size() > 1) {
             /* write the middle nodes */
             for (int i = replace_nodes.size() - 2; i >= 0; --i) {
-                write_node(replace_nodes[i], replace_nodes[i + 1], bcp);
+                write_node(replace_nodes[i], replace_nodes[i + 1], context);
             }
         }
         /* write the left most node */
-        write_node(left_most_node, replace_nodes[0], bcp);
+        write_node(left_most_node, replace_nodes[0], context);
     } else {
         /* write the left most node */
-        write_node(left_most_node, nullptr, bcp);
+        write_node(left_most_node, nullptr, context);
     }
 
     /* write the parent node */
-    write_node(parent_node, left_most_node, bcp);
+    write_node(parent_node, left_most_node, context);
 
 #ifndef NDEBUG
     for (const auto& n : replace_nodes) {
@@ -354,12 +353,12 @@ btree_status_t Btree< K, V >::merge_nodes(const BtreeNodePtr< K >& parent_node, 
     if (last_debug_ckey.compare(&new_last_debug_ckey) != 0) {
         LOGINFO("{}", last_node->to_string());
         if (deleted_nodes.size() > 0) { LOGINFO("{}", (deleted_nodes[deleted_nodes.size() - 1]->to_string())); }
-        HS_DEBUG_ASSERT(false, "compared failed");
+        BT_DBG_ASSERT(false, "compared failed");
     }
 #endif
     /* free nodes. It actually gets freed after cp is completed */
     for (const auto& n : old_nodes) {
-        free_node(n, (bcp ? bcp->free_blkid_list : nullptr));
+        free_node(n);
     }
     for (const auto& n : deleted_nodes) {
         free_node(n);

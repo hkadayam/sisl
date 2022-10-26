@@ -199,6 +199,7 @@ struct BtreeConfig {
 
     uint8_t m_ideal_fill_pct{90};
     uint8_t m_split_pct{50};
+    uint32_t m_rebalance_max_nodes{3};
 
     bool m_custom_kv{false}; // If Key/Value needs some transformation before read or write
     btree_node_type m_leaf_node_type{btree_node_type::VAR_OBJECT};
@@ -221,6 +222,7 @@ struct BtreeConfig {
     void set_max_value_size(uint32_t max_value_size) { m_max_value_size = max_value_size; }
 
     uint32_t split_size(uint32_t filled_size) const { return uint32_cast(filled_size * m_split_pct) / 100; }
+    uint32_t ideal_fill_size() const { return (uint32_t)(m_node_size * m_ideal_fill_pct) / 100; }
     const std::string& name() const { return m_btree_name; }
 
     bool is_custom_kv() const { return m_custom_kv; }

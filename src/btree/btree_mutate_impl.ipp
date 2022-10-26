@@ -119,7 +119,7 @@ retry:
             pkey = my_node->get_nth_key(curr_ind - 1, true);
             if (child_node->get_total_entries() != 0) {
                 ckey = child_node->get_first_key();
-                BT_NODE_DBG_ASSERT_LE(ckey.compare(pkey), 0, child_node);
+                BT_NODE_DBG_ASSERT_GE(ckey.compare(pkey), 0, child_node);
             }
             // BT_NODE_DBG_ASSERT_EQ((is_range_update_req(put_req) || k.compare(pkey) >= 0), true, my_node);
         }
@@ -461,7 +461,8 @@ bool Btree< K, V >::is_split_needed(const BtreeNodePtr< K >& node, const BtreeCo
             ((s_match.size() + 1) * (K::get_estimate_max_size() + node->get_record_size()));
     } else {
         auto& sreq = to_single_put_req(req);
-
+        size_needed = sreq.key().serialized_size() + sreq.value().serialized_size() + node->get_record_size();
+#if 0
         // leaf node,
         // NOTE : size_needed is just an guess here. Actual implementation of Mapping key/value can have
         // specific logic which determines of size changes on insert or update.
@@ -475,6 +476,7 @@ bool Btree< K, V >::is_split_needed(const BtreeNodePtr< K >& node, const BtreeCo
             size_needed = compute_single_put_needed_size(existing_val, (const V&)sreq.value()) +
                 sreq.key().serialized_size() + node->get_record_size();
         }
+#endif
     }
     int64_t alreadyFilledSize = BtreeNode< K >::node_area_size(cfg) - node->get_available_size(cfg);
     return (alreadyFilledSize + size_needed >= BtreeNode< K >::ideal_fill_size(cfg));

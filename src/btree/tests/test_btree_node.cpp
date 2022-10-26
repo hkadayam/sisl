@@ -28,6 +28,9 @@
 #include "btree_test_kvs.hpp"
 
 static constexpr uint32_t g_node_size{4096};
+static constexpr uint32_t g_max_keys{6000};
+static std::uniform_int_distribution< uint32_t > g_randkey_generator{0, g_max_keys};
+
 using namespace sisl::btree;
 SISL_LOGGING_INIT(btree)
 
