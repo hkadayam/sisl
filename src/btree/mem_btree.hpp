@@ -51,7 +51,11 @@ private:
         return BtreeNodePtr< K >{new_node};
     }
 
-    btree_status_t read_node(bnodeid_t id, BtreeNodePtr< K >& bnode) const override {
+    btree_status_t write_node_impl(const BtreeNodePtr< K >& bn, const BtreeNodePtr< K >& dependent_bn, void* context) {
+        return btree_status_t::success;
+    }
+
+    btree_status_t read_node_impl(bnodeid_t id, BtreeNodePtr< K >& bnode) const override {
         bnode = BtreeNodePtr< K >{r_cast< BtreeNode< K >* >(id)};
         return btree_status_t::success;
     }
@@ -75,7 +79,7 @@ private:
         return btree_status_t::success;
     }
 
-    void free_node(const BtreeNodePtr< K >& node, void* context) override { this->do_free_node(node); }
+    void free_node_impl(const BtreeNodePtr< K >& node, void* context) override {}
 
     void create_tree_precommit(const BtreeNodePtr< K >& root_node, void* op_context) override {}
     void split_node_precommit(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node1,

@@ -70,7 +70,7 @@ public:
         }
     }
 
-    int compare_range(const BtreeKeyRange& range) const override {
+    /*int compare_range(const BtreeKeyRange& range) const override {
         if (m_key == start_key(range)) {
             return range.is_start_inclusive() ? 0 : -1;
         } else if (m_key < start_key(range)) {
@@ -82,7 +82,7 @@ public:
         } else {
             return 0;
         }
-    }
+    }*/
 
     sisl::blob serialize() const override {
         return sisl::blob{uintptr_cast(const_cast< uint32_t* >(&m_key)), uint32_cast(sizeof(uint32_t))};
@@ -168,19 +168,19 @@ public:
         }
     }
 
-    int compare_range(const BtreeKeyRange& range) const override {
-        if (m_key == start_key(range)) {
-            return range.is_start_inclusive() ? 0 : -1;
-        } else if (m_key < start_key(range)) {
-            return -1;
-        } else if (m_key == end_key(range)) {
-            return range.is_end_inclusive() ? 0 : 1;
-        } else if (m_key > end_key(range)) {
-            return 1;
-        } else {
-            return 0;
-        }
-    }
+    /*    int compare_range(const BtreeKeyRange& range) const override {
+            if (m_key == start_key(range)) {
+                return range.is_start_inclusive() ? 0 : -1;
+            } else if (m_key < start_key(range)) {
+                return -1;
+            } else if (m_key == end_key(range)) {
+                return range.is_end_inclusive() ? 0 : 1;
+            } else if (m_key > end_key(range)) {
+                return 1;
+            } else {
+                return 0;
+            }
+        } */
 
     std::string to_string() const { return fmt::format("{}-{}", m_key, idx_to_key(m_key)->substr(0, 8)); }
 

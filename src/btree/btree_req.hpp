@@ -4,10 +4,15 @@
 
 namespace sisl {
 namespace btree {
+struct BtreeRequest;
+
+typedef std::pair< BtreeKey, BtreeValue > btree_kv_t;
+
 // Base class for any btree operations
 struct BtreeRequest {
     BtreeRequest() = default;
     BtreeRequest(void* app_ctx, void* op_ctx) : m_app_context{app_ctx}, m_op_context{op_ctx} {}
+
     void* m_app_context{nullptr};
     void* m_op_context{nullptr};
 };
@@ -56,38 +61,34 @@ public:
 
     std::unique_ptr< const BtreeKey > m_k;
     std::unique_ptr< const BtreeValue > m_v;
-    btree_put_type m_put_type;
+    const btree_put_type m_put_type;
     std::unique_ptr< BtreeValue > m_existing_val;
 };
 
-struct BtreeRangeUpdateRequest : public BtreeRangeRequest {
+struct BtreeRangePutRequest : public BtreeRangeRequest {
 public:
-    BtreeRangeUpdateRequest(BtreeSearchState&& search_state, btree_put_type put_type, const BtreeValue& value,
-                            void* app_context = nullptr, uint32_t batch_size = std::numeric_limits< uint32_t >::max()) :
+    BtreeRangePutRequest(BtreeSearchState&& search_state, btree_put_type put_type, std::unique_ptr< BtreeValue > value,
+                         void* app_context = nullptr, uint32_t batch_size = std::numeric_limits< uint32_t >::max()) :
             BtreeRangeRequest(std::move(search_state), app_context, batch_size),
             m_put_type{put_type},
-            m_newval{value} {}
+            m_newval{std::move(value)} {}
 
-    const btree_put_type m_put_type{btree_put_type::INSERT_ONLY_IF_NOT_EXISTS};
-    const BtreeValue& m_newval;
+    const btree_put_type m_put_type{btree_put_type::REPLACE_ONLY_IF_EXISTS};
+    std::unique_ptr< BtreeValue > m_newval;
 };
 
-using BtreeMutateRequest = std::variant< BtreeSinglePutRequest, BtreeRangeUpdateRequest >;
+using BtreeMutateRequest = std::variant< BtreeSinglePutRequest, BtreeRangePutRequest >;
 
-static bool is_range_update_req(BtreeMutateRequest& req) {
-    return (std::holds_alternative< BtreeRangeUpdateRequest >(req));
-}
+static bool is_range_put_req(BtreeMutateRequest& req) { return (std::holds_alternative< BtreeRangePutRequest >(req)); }
 
-static BtreeRangeUpdateRequest& to_range_update_req(BtreeMutateRequest& req) {
-    return std::get< BtreeRangeUpdateRequest >(req);
-}
+static BtreeRangePutRequest& to_range_put_req(BtreeMutateRequest& req) { return std::get< BtreeRangePutRequest >(req); }
 
 static BtreeSinglePutRequest& to_single_put_req(BtreeMutateRequest& req) {
     return std::get< BtreeSinglePutRequest >(req);
 }
 
 static void* put_req_op_ctx(BtreeMutateRequest& req) {
-    return (is_range_update_req(req)) ? to_range_update_req(req).m_op_context : to_single_put_req(req).m_op_context;
+    return (is_range_put_req(req)) ? to_range_put_req(req).m_op_context : to_single_put_req(req).m_op_context;
 }
 
 /////////////////////////// 2: Remove Operations /////////////////////////////////////
@@ -114,10 +115,25 @@ public:
     std::unique_ptr< BtreeValue > m_outval;
 };
 
-using BtreeRemoveRequest = std::variant< BtreeSingleRemoveRequest, BtreeRemoveAnyRequest >;
+struct BtreeRangeRemoveRequest : public BtreeRangeRequest {
+public:
+    BtreeRangeRemoveRequest(BtreeSearchState&& search_state, void* app_context = nullptr,
+                            uint32_t batch_size = std::numeric_limits< uint32_t >::max()) :
+            BtreeRangeRequest(std::move(search_state), app_context, batch_size) {}
+};
+
+using BtreeRemoveRequest = std::variant< BtreeSingleRemoveRequest, BtreeRemoveAnyRequest, BtreeRangeRemoveRequest >;
+
+static bool is_single_remove_request(BtreeRemoveRequest& req) {
+    return (std::holds_alternative< BtreeSingleRemoveRequest >(req));
+}
 
 static bool is_remove_any_request(BtreeRemoveRequest& req) {
     return (std::holds_alternative< BtreeRemoveAnyRequest >(req));
+}
+
+static bool is_range_remove_request(BtreeRemoveRequest& req) {
+    return (std::holds_alternative< BtreeRangeRemoveRequest >(req));
 }
 
 static BtreeSingleRemoveRequest& to_single_remove_req(BtreeRemoveRequest& req) {
@@ -128,8 +144,18 @@ static BtreeRemoveAnyRequest& to_remove_any_req(BtreeRemoveRequest& req) {
     return std::get< BtreeRemoveAnyRequest >(req);
 }
 
+static BtreeRangeRemoveRequest& to_range_remove_req(BtreeRemoveRequest& req) {
+    return std::get< BtreeRangeRemoveRequest >(req);
+}
+
 static void* remove_req_op_ctx(BtreeRemoveRequest& req) {
-    return (is_remove_any_request(req)) ? to_remove_any_req(req).m_op_context : to_single_remove_req(req).m_op_context;
+    if (is_range_remove_request(req)) {
+        return to_range_remove_req(req).m_op_context;
+    } else if (is_remove_any_request(req)) {
+        return to_remove_any_req(req).m_op_context;
+    } else {
+        return to_single_remove_req(req).m_op_context;
+    }
 }
 
 /////////////////////////// 3: Get Operations /////////////////////////////////////

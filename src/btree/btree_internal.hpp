@@ -186,10 +186,9 @@ VENUM(btree_node_type, uint32_t, FIXED = 0, VAR_VALUE = 1, VAR_KEY = 2, VAR_OBJE
 VENUM(btree_store_type, uint8_t, MEM = 0, SSD = 1)
 #endif
 
-ENUM(btree_status_t, uint32_t, success, not_found, item_found, closest_found, closest_removed, retry, has_more,
-     read_failed, write_failed, stale_buf, refresh_failed, put_failed, space_not_avail, split_failed, insert_failed,
-     cp_mismatch, merge_not_required, merge_failed, replay_not_needed, fast_path_not_possible, resource_full,
-     update_debug_bm_failed, crc_mismatch)
+ENUM(btree_status_t, uint32_t, success, not_found, retry, has_more, read_failed, write_failed, stale_buf,
+     refresh_failed, put_failed, space_not_avail, split_failed, insert_failed, cp_mismatch, merge_not_required,
+     merge_failed, replay_not_needed, fast_path_not_possible, resource_full, crc_mismatch, not_supported, node_freed)
 
 struct BtreeConfig {
     uint64_t m_max_objs{0};

@@ -45,11 +45,6 @@ struct transient_hdr_t {
 
     /* these variables are accessed without taking lock and are not expected to change after init */
     uint8_t is_leaf_node{0};
-    // btree_store_type store_type{btree_store_type::MEM};
-
-#ifndef NDEBUG
-    int is_lock{-1};
-#endif
 
     bool is_leaf() const { return (is_leaf_node != 0); }
 };
@@ -425,10 +420,29 @@ public:
         m_trans_hdr.upgraders.increment(1);
         this->unlock(locktype_t::READ);
         this->lock(locktype_t::WRITE);
+        m_trans_hdr.upgraders.decrement(1);
     }
 
     void lock_acknowledge() { m_trans_hdr.upgraders.decrement(1); }
     bool any_upgrade_waiters() const { return (!m_trans_hdr.upgraders.testz()); }
+
+    bool can_accomodate(const BtreeConfig& cfg, uint32_t key_size, uint32_t value_size) const {
+        return ((key_size + value_size + get_record_size()) <= get_available_size(cfg));
+    }
+
+    template < typename V >
+    void add_nth_obj_to_list(uint32_t ind, std::vector< std::pair< K, V > >* vec, bool copy) const {
+        std::pair< K, V > kv;
+        vec->emplace_back(kv);
+
+        auto* pkv = &vec->back();
+        if (ind == get_total_entries() && !is_leaf()) {
+            pkv->second = edge_value_internal< V >();
+        } else {
+            pkv->first = get_nth_key(ind, copy);
+            get_nth_value(ind, &pkv->second, copy);
+        }
+    }
 
 public:
     // Public method which needs to be implemented by variants
@@ -490,20 +504,6 @@ private:
         }
 
         return std::make_pair(found, end);
-    }
-
-    template < typename V >
-    void add_nth_obj_to_list(uint32_t ind, std::vector< std::pair< K, V > >* vec, bool copy) const {
-        std::pair< K, V > kv;
-        vec->emplace_back(kv);
-
-        auto* pkv = &vec->back();
-        if (ind == get_total_entries() && !is_leaf()) {
-            pkv->second = edge_value_internal< V >();
-        } else {
-            pkv->first = get_nth_key(ind, copy);
-            get_nth_value(ind, &pkv->second, copy);
-        }
     }
 
 public:
