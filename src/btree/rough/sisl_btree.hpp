@@ -264,7 +264,7 @@ public:
 
     uint64_t get_used_size() const { return m_node_size * m_total_nodes.load(); }
 
-    btree_status_t range_put(const BtreeRangeUpdateRequest< K, V >& bur) {
+    btree_status_t range_put(const BtreeRangePutRequest< K, V >& bur) {
         BtreeQueryCursor cur;
         bool reset_cur = false;
         if (!bur.get_input_range().is_cursor_valid()) {

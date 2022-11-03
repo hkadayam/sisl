@@ -98,9 +98,9 @@ protected:
         } else {
             K subrange_start_key, subrange_end_key;
             bool start_incl = false, end_incl = false;
-            if (is_range_update_req(put_req)) {
-                to_range_update_req(put_req)->get_input_range().copy_start_end_blob(subrange_start_key, start_incl,
-                                                                                    subrange_end_key, end_incl);
+            if (is_range_put_req(put_req)) {
+                to_range_put_req(put_req)->get_input_range().copy_start_end_blob(subrange_start_key, start_incl,
+                                                                                 subrange_end_key, end_incl);
             }
             BtreeSearchRange subrange(subrange_start_key, start_incl, subrange_end_key, end_incl);
             ret = do_put(root, acq_lock, put_req, ind, subrange);
@@ -334,7 +334,7 @@ private:
             /* Get subrange if it is a range update */
             K start_key, end_key;
             bool start_incl = false, end_incl = false;
-            if (is_range_update_req(put_req) && child_node->is_leaf()) {
+            if (is_range_put_req(put_req) && child_node->is_leaf()) {
                 /* We get the subrange only for leaf because this is where we will be inserting keys. In interior
                  * nodes, keys are always propogated from the lower nodes.
                  */
@@ -352,7 +352,7 @@ private:
                 goto retry;
             }
 
-            if (is_range_update_req(put_req) && child_node->is_leaf()) {
+            if (is_range_put_req(put_req) && child_node->is_leaf()) {
                 THIS_BT_LOG(DEBUG, btree_structures, my_node, "Subrange:s:{},e:{},c:{},nid:{},edgeid:{},sk:{},ek:{}",
                             start_ind, end_ind, curr_ind, my_node->get_node_id(), my_node->get_edge_id(),
                             subrange.get_start_key()->to_string(), subrange.get_end_key()->to_string());
@@ -370,7 +370,7 @@ private:
                         HS_ASSERT_CMP(DEBUG, ckey.compare(pkey), <=, 0);
                     }
                 }
-                HS_DEBUG_ASSERT_EQ((is_range_update_req(put_req) || k.compare(pkey) <= 0), true);
+                HS_DEBUG_ASSERT_EQ((is_range_put_req(put_req) || k.compare(pkey) <= 0), true);
             }
             if (curr_ind > 0) { // not first child
                 pkey = my_node->get_nth_key(curr_ind - 1, true);
@@ -378,7 +378,7 @@ private:
                     ckey = child_node->get_first_key();
                     HS_ASSERT_CMP(DEBUG, pkey.compare(ckey), <=, 0);
                 }
-                HS_DEBUG_ASSERT_EQ((is_range_update_req(put_req) || k.compare(pkey) >= 0), true);
+                HS_DEBUG_ASSERT_EQ((is_range_put_req(put_req) || k.compare(pkey) >= 0), true);
             }
 #endif
             if (curr_ind == end_ind) {
@@ -604,7 +604,6 @@ private:
         }
 #endif
 
-        BT_DEBUG_ASSERT_CMP(my_node->m_common_header.is_lock, ==, 1, my_node);
     done:
         return ret;
     }

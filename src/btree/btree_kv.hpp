@@ -32,10 +32,10 @@ ENUM(MultiMatchOption, uint16_t,
 )
 
 ENUM(btree_put_type, uint16_t,
-     INSERT_ONLY_IF_NOT_EXISTS, // Insert
-     REPLACE_ONLY_IF_EXISTS,    // Upsert
-     REPLACE_IF_EXISTS_ELSE_INSERT,
-     APPEND_ONLY_IF_EXISTS, // Update
+     INSERT_ONLY_IF_NOT_EXISTS,     // Insert
+     REPLACE_ONLY_IF_EXISTS,        // Update
+     REPLACE_IF_EXISTS_ELSE_INSERT, // Upsert
+     APPEND_ONLY_IF_EXISTS,         // Update
      APPEND_IF_EXISTS_ELSE_INSERT)
 
 // The base class, btree library expects its key to be derived from
@@ -58,17 +58,9 @@ public:
     virtual void clone(const BtreeKey& other) = 0;
     virtual int compare(const BtreeKey& other) const = 0;
 
-    /* Applicable only for extent keys, so do default compare */
-    virtual int compare_head(const BtreeKey& other) const { return compare(other); };
-
-    virtual int compare_range(const BtreeKeyRange& range) const = 0;
-
     virtual sisl::blob serialize() const = 0;
     virtual uint32_t serialized_size() const = 0;
     // virtual void deserialize(const sisl::blob& b) = 0;
-
-    // Applicable only to extent keys, where keys have head and tail
-    virtual sisl::blob serialize_tail() const { return serialize(); }
 
     virtual std::string to_string() const = 0;
     virtual bool is_extent_key() const { return false; }
@@ -115,27 +107,46 @@ private:
             m_multi_selector{option} {}
 };
 
-/* This type is for keys which is range in itself i.e each key is having its own
+/*
+ * This type is for keys which is range in itself i.e each key is having its own
  * start() and end().
  */
+template < typename K >
 class ExtentBtreeKey : public BtreeKey {
 public:
     ExtentBtreeKey() = default;
     virtual ~ExtentBtreeKey() = default;
     virtual bool is_extent_key() const { return true; }
-    virtual int compare_end(const BtreeKey& other) const = 0;
+
+    // Provide the length of the extent key, which is end - start + 1
+    virtual uint32_t extent_length() const = 0;
+
+    // Get the distance between the start of this key and start of other key. It returns equivalent of
+    // (other.start - this->start + 1)
+    virtual int64_t distance_start(const ExtentBtreeKey< K >& other) const = 0;
+
+    // Get the distance between the end of this key and end of other key. It returns equivalent of
+    // (other.end - this->end + 1)
+    virtual int64_t distance_end(const ExtentBtreeKey< K >& other) const = 0;
+
+    // Get the distance between the start of this key and end of other key. It returns equivalent of
+    // (other.end - this->start + 1)
+    virtual int64_t distance(const ExtentBtreeKey< K >& other) const = 0;
+
+    // Extract a new extent key from the given offset upto this length from this key and optionally do a deep copy
+    virtual K extract(uint32_t offset, uint32_t length, bool copy) const = 0;
+
+    // Merge this extent btree key with other extent btree key and return a new key
+    virtual K combine(const ExtentBtreeKey< K >& other) const = 0;
+
+    // TODO: Evaluate if we need these 3 methods or we can manage with other methods
     virtual int compare_start(const BtreeKey& other) const = 0;
-
-    virtual bool preceeds(const BtreeKey& other) const = 0;
-    virtual bool succeeds(const BtreeKey& other) const = 0;
-
-    virtual sisl::blob serialize_tail() const override = 0;
+    virtual int compare_end(const BtreeKey& other) const = 0;
 
     /* we always compare the end key in case of extent */
     virtual int compare(const BtreeKey& other) const override { return (compare_end(other)); }
 
-    /* we always compare the end key in case of extent */
-    virtual int compare_range(const BtreeKeyRange& range) const override { return (compare_end(range.end_key())); }
+    K extract_end(bool copy) const { return extract(extent_length() - 1, 1, copy); }
 };
 
 class BtreeValue {
@@ -149,20 +160,34 @@ public:
     virtual blob serialize() const = 0;
     virtual uint32_t serialized_size() const = 0;
     virtual void deserialize(const blob& b, bool copy) = 0;
-    // virtual void append_blob(const BtreeValue& new_val, BtreeValue& existing_val) = 0;
-
-    // virtual void set_blob_size(uint32_t size) = 0;
-    // virtual uint32_t estimate_size_after_append(const BtreeValue& new_val) = 0;
-
-#if 0
-    virtual void get_overlap_diff_kvs(BtreeKey* k1, BtreeValue* v1, BtreeKey* k2, BtreeValue* v2, uint32_t param,
-                                      diff_read_next_t& to_read,
-                                      std::vector< std::pair< BtreeKey, BtreeValue > >& overlap_kvs) {
-        LOGINFO("Not Implemented");
-    }
-#endif
 
     virtual std::string to_string() const { return ""; }
+};
+
+template < typename V >
+class ExtentBtreeValue : public BtreeValue {
+public:
+    virtual ~ExtentBtreeValue() = default;
+
+    // Extract a new extent value from the given offset upto this length from this value and optionally do a deep copy
+    virtual V extract(uint32_t offset, uint32_t length, bool copy) const = 0;
+
+    // Returns the returns the serialized size if we were to extract other value from offset upto length
+    // This method is equivalent to: extract(offset, length, false).serialized_size()
+    // However, this method provides values to directly compute the extracted size without extracting - which is more
+    // efficient.
+    virtual uint32_t extracted_size(uint32_t offset, uint32_t length) const = 0;
+
+    // This method is similar to extract(0, length) along with moving the current values start to length. So for example
+    // if value has 0-100 and if shift(80) is called, this method returns a value from 0-79 and moves the start offset
+    // of current value to 80.
+    virtual V shift(uint32_t length, bool copy) = 0;
+
+    // Given the length, report back how many extents from the current value can fit.
+    virtual uint32_t num_extents_fit(uint32_t length) const = 0;
+
+    // Returns if every piece of extents are equally sized.
+    virtual bool is_equal_sized() const = 0;
 };
 
 template < typename K >
@@ -275,8 +300,14 @@ public:
 #endif
 
     BtreeKeyRange next_range() const {
-        return BtreeKeyRange(&next_key(), is_start_inclusive(), &m_input_range.end_key(), is_end_inclusive(),
-                             m_input_range.multi_option());
+        if (m_cursor && m_cursor->m_last_key) {
+            // Cursor next is always non-inclusive
+            return BtreeKeyRange(m_cursor->m_last_key.get(), false, &m_input_range.end_key(), is_end_inclusive(),
+                                 m_input_range.multi_option());
+        } else {
+            return BtreeKeyRange(&m_input_range.start_key(), is_start_inclusive(), &m_input_range.end_key(),
+                                 is_end_inclusive(), m_input_range.multi_option());
+        }
     }
 
 private:

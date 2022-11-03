@@ -111,61 +111,21 @@ struct BtreeTest : public testing::Test {
                 << "Insert existing value doesn't return correct data for key " << r->first;
         }
     }
-#if 0
-    void query_all_validate() const {
-        std::vector< std::pair< K, V > > out_vector;
-        auto const max_entries = SISL_OPTIONS["num_entries"].as< uint32_t >();
-        BtreeKeyRangeSafe< K > r{K{0u}, true, K{max_entries}, false};
-        BtreeQueryRequest qreq{BtreeSearchState{r}};
-        auto ret = m_bt->query(qreq, out_vector);
 
-        ASSERT_EQ(ret, btree_status_t::success) << "Expected success on query";
-        ASSERT_EQ(out_vector.size(), m_shadow_map.size())
-            << "Expected number of entries to be same with shadow_map size";
+    void remove_one(uint32_t k) {
+        std::unique_ptr< V > existing_v;
+        BtreeRemoveRequest req = BtreeSingleRemoveRequest{std::make_unique< K >(k), std::move(existing_v)};
+        bool removed = (m_bt->remove(req) == btree_status_t::success);
 
-        uint64_t idx{0};
-        for (auto& [key, value] : m_shadow_map) {
-            ASSERT_EQ(out_vector[idx].second, value)
-                << "Range get doesn't return correct data for key=" << key << " idx=" << idx;
-            ++idx;
+        auto& rsreq = to_single_remove_req(req);
+        bool expected_removed = (m_shadow_map.find(rsreq.key()) != m_shadow_map.end());
+        ASSERT_EQ(removed, expected_removed) << "Expected remove of key " << k << " to be " << expected_removed;
+
+        if (removed) {
+            validate_data(rsreq.key(), (const V&)rsreq.value());
+            m_shadow_map.erase(rsreq.key());
         }
     }
-
-    void query_all_paginate_validate(uint32_t batch_size) const {
-        std::vector< std::pair< K, V > > out_vector;
-        auto const max_entries = SISL_OPTIONS["num_entries"].as< uint32_t >();
-        BtreeKeyRangeSafe< K > r{K{0u}, true, K{max_entries - 1}, true};
-        BtreeQueryRequest qreq{BtreeSearchState{r, true /* paginated_query */},
-                               BtreeQueryType::SWEEP_NON_INTRUSIVE_PAGINATION_QUERY, batch_size};
-        uint32_t remaining{max_entries};
-        auto it = m_shadow_map.begin();
-
-        while (remaining > 0) {
-            out_vector.clear();
-            auto const ret = m_bt->query(qreq, out_vector);
-            auto const expected_count = std::min(remaining, batch_size);
-
-            ASSERT_EQ(out_vector.size(), expected_count) << "Received incorrect value on query pagination";
-            remaining -= expected_count;
-
-            if (remaining == 0) {
-                ASSERT_EQ(ret, btree_status_t::success) << "Expected success on query";
-            } else {
-                ASSERT_EQ(ret, btree_status_t::has_more) << "Expected query to return has_more";
-            }
-
-            for (size_t idx{0}; idx < out_vector.size(); ++idx) {
-                ASSERT_EQ(out_vector[idx].second, it->second)
-                    << "Range get doesn't return correct data for key=" << it->first << " idx=" << idx;
-                ++it;
-            }
-        }
-        out_vector.clear();
-        auto ret = m_bt->query(qreq, out_vector);
-        ASSERT_EQ(ret, btree_status_t::success) << "Expected success on query";
-        ASSERT_EQ(out_vector.size(), 0) << "Received incorrect value on empty query pagination";
-    }
-#endif
 
     void query_all_validate() const {
         query_validate(0u, SISL_OPTIONS["num_entries"].as< uint32_t >() - 1, UINT32_MAX);
@@ -315,6 +275,31 @@ TYPED_TEST(BtreeTest, SequentialInsert) {
     LOGINFO("Step 8: Do incorrect input and validate errors");
     this->query_validate(num_entries + 100, num_entries + 500, 5);
     this->get_any_validate(num_entries + 1, num_entries + 2);
+}
+
+TYPED_TEST(BtreeTest, SequentialRemove) {
+    // Forward sequential insert
+    const auto num_entries = SISL_OPTIONS["num_entries"].as< uint32_t >();
+    LOGINFO("Step 1: Do Forward sequential insert for {} entries", num_entries);
+    for (uint32_t i{0}; i < num_entries; ++i) {
+        this->put(i, btree_put_type::INSERT_ONLY_IF_NOT_EXISTS);
+    }
+    LOGINFO("Step 2: Query {} entries and validate with pagination of 75 entries", num_entries);
+    this->query_validate(0, num_entries, 75);
+
+    const auto entries_iter1 = num_entries / 2;
+    LOGINFO("Step 3: Do Forward sequential remove for {} entries", entries_iter1);
+    for (uint32_t i{0}; i < entries_iter1; ++i) {
+        this->remove_one(i);
+    }
+    LOGINFO("Step 4: Query {} entries and validate with pagination of 75 entries", entries_iter1);
+    this->query_validate(0, entries_iter1, 75);
+
+    const auto entries_iter2 = num_entries - entries_iter1;
+    LOGINFO("Step 5: Do Reverse sequential remove of remaining {} entries", entries_iter2);
+    for (uint32_t i{num_entries - 1}; i >= entries_iter1; --i) {
+        this->remove_one(i);
+    }
 }
 
 int main(int argc, char* argv[]) {

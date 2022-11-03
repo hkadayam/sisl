@@ -18,6 +18,10 @@
 namespace sisl {
 namespace btree {
 
+typedef std::function< bool(const BtreeKey&, const BtreeValue&, const BtreeRequest&) > on_kv_read_t;
+typedef std::function< bool(const BtreeKey&, const BtreeValue&, const BtreeRequest&) > on_kv_remove_t;
+typedef std::function< bool(const BtreeKey&, const BtreeKey&, const BtreeValue&, const BtreeRequest&) > on_kv_update_t;
+
 #ifdef INCASE_WE_NEED_COMMON
 template < typename K, typename V >
 class BtreeCommon {
@@ -51,6 +55,11 @@ private:
     std::atomic< uint64_t > m_req_id{0};
 #endif
 
+    // Optional callback on various read or kv operations
+    on_kv_read_t m_on_read_cb{nullptr};
+    on_kv_update_t m_on_update_cb{nullptr};
+    on_kv_remove_t m_on_remove_cb{nullptr};
+
     // This workaround of BtreeThreadVariables is needed instead of directly declaring statics
     // to overcome the gcc bug, pointer here: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=66944
     static BtreeThreadVariables< K, V >* bt_thread_vars() {
@@ -67,7 +76,8 @@ protected:
 
 public:
     /////////////////////////////////////// All External APIs /////////////////////////////
-    Btree(const BtreeConfig& cfg);
+    Btree(const BtreeConfig& cfg, on_kv_read_t&& read_cb = nullptr, on_kv_update_t&& update_cb = nullptr,
+          on_kv_remove_t&& remove_cb = nullptr);
     virtual ~Btree();
     virtual btree_status_t init(void* op_context);
     btree_status_t put(BtreeMutateRequest& put_req);
@@ -91,13 +101,12 @@ protected:
     virtual BtreeNodePtr< K > alloc_node(bool is_leaf, bool& is_new_allocation,
                                          const BtreeNodePtr< K >& copy_from = nullptr) = 0;
     virtual BtreeNode< K >* init_node(uint8_t* node_buf, bnodeid_t id, bool init_buf, bool is_leaf);
-    virtual btree_status_t read_node(bnodeid_t id, BtreeNodePtr< K >& bnode) const = 0;
-    virtual btree_status_t write_node(const BtreeNodePtr< K >& bn, const BtreeNodePtr< K >& dependent_bn,
-                                      void* context);
-    virtual btree_status_t write_node_sync(const BtreeNodePtr< K >& node, void* context);
+    virtual btree_status_t read_node_impl(bnodeid_t id, BtreeNodePtr< K >& bnode) const = 0;
+    virtual btree_status_t write_node_impl(const BtreeNodePtr< K >& bn, const BtreeNodePtr< K >& dependent_bn,
+                                           void* context) = 0;
     virtual void swap_node(const BtreeNodePtr< K >& node1, const BtreeNodePtr< K >& node2, void* context) = 0;
     virtual btree_status_t refresh_node(const BtreeNodePtr< K >& bn, bool is_write_modifiable, void* context) const = 0;
-    virtual void free_node(const BtreeNodePtr< K >& node, void* context) = 0;
+    virtual void free_node_impl(const BtreeNodePtr< K >& node, void* context) = 0;
 
     virtual void create_tree_precommit(const BtreeNodePtr< K >& root_node, void* op_context) = 0;
     virtual void split_node_precommit(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node1,
@@ -111,45 +120,30 @@ protected:
     virtual std::string btree_store_type() const = 0;
 
     /////////////////////////// Methods the application use case is expected to handle ///////////////////////////
-    virtual int64_t compute_single_put_needed_size(const V& current_val, const V& new_val) const;
-    virtual int64_t compute_range_put_needed_size(const std::vector< std::pair< K, V > >& existing_kvs,
-                                                  const V& new_val) const;
-    virtual btree_status_t custom_kv_select_for_write(uint8_t node_version,
-                                                      const std::vector< std::pair< K, V > >& match_kv,
-                                                      std::vector< std::pair< K, V > >& replace_kv,
-                                                      const BtreeKeyRange& range,
-                                                      const BtreeRangeUpdateRequest& rureq) const;
-    virtual btree_status_t custom_kv_select_for_read(uint8_t node_version,
-                                                     const std::vector< std::pair< K, V > >& match_kv,
-                                                     std::vector< std::pair< K, V > >& replace_kv,
-                                                     const BtreeKeyRange& range, const BtreeRangeRequest& qreq) const;
 
 protected:
-    /////////////////////////////// Internal Node Management Methods ////////////////////////////////////
     std::pair< btree_status_t, bnodeid_t > create_root_node(void* op_context);
-    btree_status_t read_and_lock_root(bnodeid_t id, BtreeNodePtr< K >& node_ptr, locktype_t int_lock_type,
-                                      locktype_t leaf_lock_type, void* context) const;
-    btree_status_t read_and_lock_child(bnodeid_t child_id, BtreeNodePtr< K >& child_node,
-                                       const BtreeNodePtr< K >& parent_node, uint32_t parent_ind,
-                                       locktype_t int_lock_type, locktype_t leaf_lock_type, void* context) const;
-    btree_status_t read_and_lock_sibling(bnodeid_t id, BtreeNodePtr< K >& node_ptr, locktype_t int_lock_type,
-                                         locktype_t leaf_lock_type, void* context) const;
+
+private:
+    /////////////////////////////// Internal Node Management Methods ////////////////////////////////////
     btree_status_t read_and_lock_node(bnodeid_t id, BtreeNodePtr< K >& node_ptr, locktype_t int_lock_type,
                                       locktype_t leaf_lock_type, void* context) const;
+    void read_node_or_fail(bnodeid_t id, BtreeNodePtr< K >& node) const;
+    btree_status_t write_node(const BtreeNodePtr< K >& node, const BtreeNodePtr< K >& dependent_bn, void* context);
+    void free_node(const BtreeNodePtr< K >& node, locktype_t cur_lock, void* context);
+    BtreeNodePtr< K > alloc_leaf_node();
+    BtreeNodePtr< K > alloc_interior_node();
+
     btree_status_t get_child_and_lock_node(const BtreeNodePtr< K >& node, uint32_t index, BtreeNodeInfo& child_info,
                                            BtreeNodePtr< K >& child_node, locktype_t int_lock_type,
                                            locktype_t leaf_lock_type, void* context) const;
-    virtual btree_status_t write_node(const BtreeNodePtr< K >& node, void* context);
-    void read_node_or_fail(bnodeid_t id, BtreeNodePtr< K >& node) const;
-    btree_status_t upgrade_node(const BtreeNodePtr< K >& my_node, BtreeNodePtr< K > child_node, void* context,
-                                locktype_t& cur_lock, locktype_t& child_cur_lock);
-    btree_status_t _lock_and_refresh_node(const BtreeNodePtr< K >& node, locktype_t type, void* context,
-                                          const char* fname, int line) const;
-    btree_status_t _lock_node_upgrade(const BtreeNodePtr< K >& node, void* context, const char* fname, int line);
+    btree_status_t upgrade_node_locks(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node,
+                                      locktype_t child_cur_lock, void* context);
+    btree_status_t upgrade_node(const BtreeNodePtr< K >& node, locktype_t prev_lock, void* context, uint64_t prev_gen);
+    btree_status_t _lock_node(const BtreeNodePtr< K >& node, locktype_t type, void* context, const char* fname,
+                              int line) const;
     void unlock_node(const BtreeNodePtr< K >& node, locktype_t type) const;
-    BtreeNodePtr< K > alloc_leaf_node();
-    BtreeNodePtr< K > alloc_interior_node();
-    void do_free_node(const BtreeNodePtr< K >& node);
+
     std::pair< btree_status_t, uint64_t > do_destroy();
     void observe_lock_time(const BtreeNodePtr< K >& node, locktype_t type, uint64_t time_spent) const;
 
@@ -157,6 +151,8 @@ protected:
     static bool remove_locked_node(const BtreeNodePtr< K >& node, locktype_t ltype,
                                    btree_locked_node_info< K, V >* out_info);
     static uint64_t end_of_lock(const BtreeNodePtr< K >& node, locktype_t ltype);
+    bool can_extents_auto_merge() const { return true; } // TODO: Make this rcu and dynamically settable
+
 #ifndef NDEBUG
     static void check_lock_debug();
 #endif
@@ -172,16 +168,17 @@ protected:
     void validate_sanity_child(const BtreeNodePtr< K >& parent_node, uint32_t ind) const;
     void validate_sanity_next_child(const BtreeNodePtr< K >& parent_node, uint32_t ind) const;
     void print_node(const bnodeid_t& bnodeid) const;
+    bool call_on_read_kv_cb(const BtreeNodePtr< K >& node, uint32_t idx, const BtreeRequest& req) const;
+    bool call_on_remove_kv_cb(const BtreeNodePtr< K >& node, uint32_t idx, const BtreeRequest& req) const;
+    bool call_on_update_kv_cb(const BtreeNodePtr< K >& node, uint32_t idx, const BtreeKey& new_key,
+                              const BtreeRequest& req) const;
 
     //////////////////////////////// Impl Methods //////////////////////////////////////////
 
     ///////// Mutate Impl Methods
-    btree_status_t do_put(const BtreeNodePtr< K >& my_node, locktype_t curlock, BtreeMutateRequest& put_req,
-                          int ind_hint);
+    btree_status_t do_put(const BtreeNodePtr< K >& my_node, locktype_t curlock, BtreeMutateRequest& req);
     btree_status_t mutate_write_leaf_node(const BtreeNodePtr< K >& my_node, BtreeMutateRequest& req);
-    btree_status_t check_and_split_node(const BtreeNodePtr< K >& my_node, BtreeMutateRequest& req, int ind_hint,
-                                        const BtreeNodePtr< K >& child_node, locktype_t& curlock,
-                                        locktype_t& child_curlock, int child_ind, bool& split_occured);
+    btree_status_t mutate_extents_in_leaf(const BtreeNodePtr< K >& my_node, BtreeRangePutRequest& rpreq);
     btree_status_t check_split_root(BtreeMutateRequest& req);
     btree_status_t split_node(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node,
                               uint32_t parent_ind, BtreeKey* out_split_key, bool root_split, void* context);
@@ -191,9 +188,9 @@ protected:
 
     ///////// Remove Impl Methods
     btree_status_t do_remove(const BtreeNodePtr< K >& my_node, locktype_t curlock, BtreeRemoveRequest& rreq);
-    btree_status_t check_collapse_root(void* context);
     btree_status_t merge_nodes(const BtreeNodePtr< K >& parent_node, uint32_t start_indx, uint32_t end_indx,
                                void* context);
+    bool remove_extents_in_leaf(const BtreeNodePtr< K >& node, BtreeRangeRemoveRequest& rrreq);
 
     ///////// Query Impl Methods
     btree_status_t do_sweep_query(BtreeNodePtr< K >& my_node, BtreeQueryRequest& qreq,

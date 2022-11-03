@@ -16,11 +16,11 @@ btree_status_t Btree< K, V >::post_order_traversal(locktype_t ltype, const auto&
 
     btree_status_t ret{btree_status_t::success};
     if (m_root_node_id != empty_bnodeid) {
-        read_and_lock_root(m_root_node_id, root, ltype, ltype, nullptr);
+        read_and_lock_node(m_root_node_id, root, ltype, ltype, nullptr);
         if (ret != btree_status_t::success) { goto done; }
 
         ret = post_order_traversal(root, ltype, cb);
-        unlock_node(root, ltype);
+        if (ret != btree_status_t::node_freed) { unlock_node(root, ltype); }
     }
 done:
     if (ltype == locktype_t::READ) {
@@ -28,6 +28,7 @@ done:
     } else if (ltype == locktype_t::WRITE) {
         m_btree_lock.unlock();
     }
+    if (ret == btree_status_t::node_freed) { ret = btree_status_t::success; }
     return ret;
 }
 
@@ -47,33 +48,35 @@ btree_status_t Btree< K, V >::post_order_traversal(const BtreeNodePtr< K >& node
             }
 
             BtreeNodePtr< K > child;
-            ret = read_and_lock_child(child_info.bnode_id(), child, node, i, ltype, ltype, nullptr);
+            ret = read_and_lock_node(child_info.bnode_id(), child, ltype, ltype, nullptr);
             if (ret != btree_status_t::success) { return ret; }
+
             ret = post_order_traversal(child, ltype, cb);
-            unlock_node(child, ltype);
+            if (ret != btree_status_t::node_freed) { unlock_node(child, ltype); }
             ++i;
         }
-        cb(node, false /* is_leaf */);
-        return ret;
+        return cb(node, false /* is_leaf */);
+    } else {
+        return cb(node, true /* is_leaf */);
     }
-
-    if (ret == btree_status_t::success) { cb(node, true /* is_leaf */); }
-    return ret;
 }
 
 template < typename K, typename V >
 void Btree< K, V >::get_all_kvs(std::vector< pair< K, V > >& kvs) const {
-    post_order_traversal(locktype_t::READ, [this, &kvs](const auto& node, bool is_leaf) {
+    post_order_traversal(locktype_t::READ, [this, &kvs](const auto& node, bool is_leaf) -> btree_status_t {
         if (!is_leaf) { node->get_all_kvs(kvs); }
+        return btree_status_t::success;
     });
 }
 
 template < typename K, typename V >
 btree_status_t Btree< K, V >::do_destroy(uint64_t& n_freed_nodes, void* context) {
-    return post_order_traversal(locktype_t::WRITE, [this, &n_freed_nodes, context](const auto& node, bool is_leaf) {
-        free_node(node, context);
-        ++n_freed_nodes;
-    });
+    return post_order_traversal(locktype_t::WRITE,
+                                [this, &n_freed_nodes, context](const auto& node, bool is_leaf) -> btree_status_t {
+                                    free_node(node, locktype_t::WRITE, context);
+                                    ++n_freed_nodes;
+                                    return btree_status_t::node_freed;
+                                });
 }
 
 template < typename K, typename V >
@@ -145,7 +148,7 @@ void Btree< K, V >::validate_sanity_child(const BtreeNodePtr< K >& parent_node, 
 
     parent_node->get(ind, &child_info, false /* copy */);
     BtreeNodePtr< K > child_node = nullptr;
-    auto ret = read_node(child_info.bnode_id(), child_node);
+    auto ret = read_node_impl(child_info.bnode_id(), child_node);
     BT_REL_ASSERT_EQ(ret, btree_status_t::success, "read failed, reason: {}", ret);
     if (child_node->get_total_entries() == 0) {
         auto parent_entries = parent_node->get_total_entries();
@@ -192,7 +195,7 @@ void Btree< K, V >::validate_sanity_next_child(const BtreeNodePtr< K >& parent_n
     parent_node->get(ind + 1, &child_info, false /* copy */);
 
     BtreeNodePtr< K > child_node = nullptr;
-    auto ret = read_node(child_info.bnode_id(), child_node);
+    auto ret = read_node_impl(child_info.bnode_id(), child_node);
     BT_REL_ASSERT_EQ(ret, btree_status_t::success, "read failed, reason: {}", ret);
 
     if (child_node->get_total_entries() == 0) {
@@ -226,6 +229,37 @@ done:
     m_btree_lock.unlock_shared();
 
     BT_LOG(INFO, "Node: <{}>", buf);
+}
+
+template < typename K, typename V >
+bool Btree< K, V >::call_on_read_kv_cb(const BtreeNodePtr< K >& node, uint32_t idx, const BtreeRequest& req) const {
+    if (m_on_read_cb) {
+        V v;
+        node->get_nth_value(idx, &v, false);
+        return m_on_read_cb(node->get_nth_key(idx, false), v, req);
+    }
+    return true;
+}
+
+template < typename K, typename V >
+bool Btree< K, V >::call_on_remove_kv_cb(const BtreeNodePtr< K >& node, uint32_t idx, const BtreeRequest& req) const {
+    if (m_on_remove_cb) {
+        V v;
+        node->get_nth_value(idx, &v, false);
+        return m_on_remove_cb(node->get_nth_key(idx, false), v, req);
+    }
+    return true;
+}
+
+template < typename K, typename V >
+bool Btree< K, V >::call_on_update_kv_cb(const BtreeNodePtr< K >& node, uint32_t idx, const BtreeKey& new_key,
+                                         const BtreeRequest& req) const {
+    if (m_on_update_cb) {
+        V v;
+        node->get_nth_value(idx, &v, false);
+        return m_on_update_cb(node->get_nth_key(idx, false), new_key, v, req);
+    }
+    return true;
 }
 
 #if 0

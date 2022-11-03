@@ -23,41 +23,24 @@ btree_status_t Btree< K, V >::do_sweep_query(BtreeNodePtr< K >& my_node, BtreeQu
             BT_NODE_LOG(TRACE, my_node, "Query leaf node");
 
             uint32_t start_ind = 0u, end_ind = 0u;
-            static thread_local std::vector< std::pair< K, V > > s_match_kvs;
-
-            s_match_kvs.clear();
             auto cur_count =
-                my_node->get_all(qreq.next_range(), qreq.batch_size() - count, start_ind, end_ind, &s_match_kvs);
-            if (cur_count == 0) {
-                if (my_node->get_last_key().compare(qreq.input_range().end_key()) >= 0) {
-                    // we've covered all key range, we are done now;
-                    break;
-                }
-            } else {
-                // fall through to visit siblings if we haven't covered key range yet;
-                if (m_bt_cfg.is_custom_kv()) {
-                    static thread_local std::vector< std::pair< K, V > > s_result_kvs;
-                    s_result_kvs.clear();
-                    custom_kv_select_for_read(my_node->get_version(), s_match_kvs, s_result_kvs, qreq.next_range(),
-                                              qreq);
+                my_node->get_all(qreq.next_range(), qreq.batch_size() - count, start_ind, end_ind, &out_values);
 
-                    auto ele_to_add = std::min((uint32_t)s_result_kvs.size(), qreq.batch_size());
-                    if (ele_to_add > 0) {
-                        out_values.insert(out_values.end(), s_result_kvs.begin(), s_result_kvs.begin() + ele_to_add);
-                    }
-                    count += ele_to_add;
-                    BT_NODE_DBG_ASSERT_LE(count, qreq.batch_size(), my_node);
-                } else {
-                    out_values.insert(std::end(out_values), std::begin(s_match_kvs), std::end(s_match_kvs));
-                    count += cur_count;
+            if (cur_count == 0) {
+                // if we've covered all key range, we are done now;
+                if (my_node->get_last_key().compare(qreq.input_range().end_key()) >= 0) { break; }
+            } else {
+                for (auto idx{start_ind}; idx < (start_ind + cur_count); ++idx) {
+                    call_on_read_kv_cb(my_node, idx, qreq);
+                    // my_node->add_nth_obj_to_list(idx, &out_values, true);
                 }
+                count += cur_count;
             }
 
             // if cur_count is 0, keep querying sibling nodes;
             if (ret == btree_status_t::success && (count < qreq.batch_size())) {
                 if (my_node->next_bnode() == empty_bnodeid) { break; }
-                ret = read_and_lock_sibling(my_node->next_bnode(), next_node, locktype_t::READ, locktype_t::READ,
-                                            nullptr);
+                ret = read_and_lock_node(my_node->next_bnode(), next_node, locktype_t::READ, locktype_t::READ, nullptr);
                 if (ret == btree_status_t::fast_path_not_possible) { break; }
 
                 if (ret != btree_status_t::success) {
@@ -79,8 +62,7 @@ btree_status_t Btree< K, V >::do_sweep_query(BtreeNodePtr< K >& my_node, BtreeQu
     ASSERT_IS_VALID_INTERIOR_CHILD_INDX(isfound, idx, my_node);
 
     BtreeNodePtr< K > child_node;
-    ret = read_and_lock_child(start_child_info.bnode_id(), child_node, my_node, idx, locktype_t::READ, locktype_t::READ,
-                              nullptr);
+    ret = read_and_lock_node(start_child_info.bnode_id(), child_node, locktype_t::READ, locktype_t::READ, nullptr);
     unlock_node(my_node, locktype_t::READ);
     if (ret != btree_status_t::success) { return ret; }
     return (do_sweep_query(child_node, qreq, out_values));
@@ -96,23 +78,15 @@ btree_status_t Btree< K, V >::do_traversal_query(const BtreeNodePtr< K >& my_nod
         BT_NODE_LOG_ASSERT_GT(qreq.batch_size(), 0, my_node);
 
         uint32_t start_ind = 0, end_ind = 0;
-
-        static thread_local std::vector< std::pair< K, V > > s_match_kvs;
-        s_match_kvs.clear();
         auto cur_count = my_node->get_all(qreq.next_range(), qreq.batch_size() - (uint32_t)out_values.size(), start_ind,
-                                          end_ind, &s_match_kvs);
+                                          end_ind, &out_values);
 
-        if (cur_count && m_bt_cfg.is_custom_kv()) {
-            static thread_local std::vector< std::pair< K, V > > s_result_kvs;
-            s_result_kvs.clear();
-            custom_kv_select_for_read(my_node->get_version(), s_match_kvs, s_result_kvs, qreq.next_range(), qreq);
-
-            auto ele_to_add = s_result_kvs.size();
-            if (ele_to_add > 0) {
-                out_values.insert(out_values.end(), s_result_kvs.begin(), s_result_kvs.begin() + ele_to_add);
+        if (cur_count) {
+            for (auto idx{start_ind}; idx < (start_ind + cur_count); ++idx) {
+                call_on_read_kv_cb(my_node, idx, qreq);
+                // my_node->add_nth_obj_to_list(idx, &out_values, true);
             }
         }
-        out_values.insert(std::end(out_values), std::begin(s_match_kvs), std::end(s_match_kvs));
 
         unlock_node(my_node, locktype_t::READ);
         if (ret != btree_status_t::success || out_values.size() >= qreq.batch_size()) {
@@ -140,8 +114,7 @@ btree_status_t Btree< K, V >::do_traversal_query(const BtreeNodePtr< K >& my_nod
         my_node->get_nth_value(idx, &child_info, false);
         BtreeNodePtr< K > child_node = nullptr;
         locktype_t child_cur_lock = locktype_t::READ;
-        ret = read_and_lock_child(child_info.bnode_id(), child_node, my_node, idx, child_cur_lock, child_cur_lock,
-                                  nullptr);
+        ret = read_and_lock_node(child_info.bnode_id(), child_node, child_cur_lock, child_cur_lock, nullptr);
         if (ret != btree_status_t::success) { break; }
 
         if (idx == end_idx) {
@@ -159,16 +132,6 @@ done:
     if (!unlocked_already) { unlock_node(my_node, locktype_t::READ); }
 
     return ret;
-}
-
-template < typename K, typename V >
-btree_status_t
-Btree< K, V >::custom_kv_select_for_read(uint8_t node_version, const std::vector< std::pair< K, V > >& match_kv,
-                                         std::vector< std::pair< K, V > >& replace_kv, const BtreeKeyRange& range,
-                                         const BtreeRangeRequest& qreq) const {
-
-    replace_kv = match_kv;
-    return btree_status_t::success;
 }
 
 #ifdef SERIALIZABLE_QUERY_IMPLEMENTATION
@@ -272,7 +235,7 @@ btree_status_t sweep_query(BtreeQueryRequest& qreq, std::vector< std::pair< K, V
     BtreeNodePtr< K > root;
     btree_status_t ret = btree_status_t::success;
 
-    ret = read_and_lock_root(m_root_node_id, root, locktype_t::READ, locktype_t::READ, nullptr);
+    ret = read_and_lock_node(m_root_node_id, root, locktype_t::READ, locktype_t::READ, nullptr);
     if (ret != btree_status_t::success) { goto out; }
 
     ret = do_sweep_query(root, qreq, out_values);
@@ -297,7 +260,7 @@ btree_status_t serializable_query(BtreeSerializableQueryRequest& qreq, std::vect
         qreq.cursor().m_locked_nodes = std::make_unique< BtreeLockTrackerImpl >(this);
 
         BtreeNodePtr< K > root;
-        ret = read_and_lock_root(m_root_node_id, root, locktype_t::READ, locktype_t::READ, nullptr);
+        ret = read_and_lock_node(m_root_node_id, root, locktype_t::READ, locktype_t::READ, nullptr);
         if (ret != btree_status_t::success) { goto out; }
         get_tracker(qreq)->push(root); // Start tracking the locked nodes.
     } else {

@@ -33,8 +33,14 @@ namespace btree {
 #endif
 
 template < typename K, typename V >
-Btree< K, V >::Btree(const BtreeConfig& cfg) :
-        m_metrics{cfg.name().c_str()}, m_node_size{cfg.node_size()}, m_bt_cfg{cfg} {
+Btree< K, V >::Btree(const BtreeConfig& cfg, on_kv_read_t&& read_cb, on_kv_update_t&& update_cb,
+                     on_kv_remove_t&& remove_cb) :
+        m_metrics{cfg.name().c_str()},
+        m_node_size{cfg.node_size()},
+        m_on_read_cb{std::move(read_cb)},
+        m_on_update_cb{std::move(update_cb)},
+        m_on_remove_cb{std::move(remove_cb)},
+        m_bt_cfg{cfg} {
     // calculate number of nodes
     const uint32_t node_area_size = BtreeNode< K >::node_area_size(cfg);
     uint32_t max_leaf_nodes =
@@ -77,7 +83,6 @@ template < typename K, typename V >
 btree_status_t Btree< K, V >::put(BtreeMutateRequest& put_req) {
     COUNTER_INCREMENT(m_metrics, btree_write_ops_count, 1);
     auto acq_lock = locktype_t::READ;
-    int ind = -1;
     bool is_leaf = false;
 
     m_btree_lock.lock_shared();
@@ -91,7 +96,7 @@ retry:
     BT_LOG_ASSERT_EQ(bt_thread_vars()->wr_locked_nodes.size(), 0);
 
     BtreeNodePtr< K > root;
-    ret = read_and_lock_root(m_root_node_id, root, acq_lock, acq_lock, put_req_op_ctx(put_req));
+    ret = read_and_lock_node(m_root_node_id, root, acq_lock, acq_lock, put_req_op_ctx(put_req));
     if (ret != btree_status_t::success) { goto out; }
     is_leaf = root->is_leaf();
 
@@ -117,9 +122,9 @@ retry:
         acq_lock = locktype_t::WRITE;
         goto retry;
     } else {
-        ret = do_put(root, acq_lock, put_req, ind);
-        if (ret == btree_status_t::retry) {
-            // Need to start from top down again, since there is a race between 2 inserts or deletes.
+        ret = do_put(root, acq_lock, put_req);
+        if ((ret == btree_status_t::retry) || (ret == btree_status_t::has_more)) {
+            // Need to start from top down again, since there was a split or we have more to insert in case of range put
             acq_lock = locktype_t::READ;
             BT_LOG(TRACE, "retrying put operation");
             BT_LOG_ASSERT_EQ(bt_thread_vars()->rd_locked_nodes.size(), 0);
@@ -149,7 +154,7 @@ btree_status_t Btree< K, V >::get(BtreeGetRequest& greq) const {
     m_btree_lock.lock_shared();
     BtreeNodePtr< K > root;
 
-    ret = read_and_lock_root(m_root_node_id, root, locktype_t::READ, locktype_t::READ, get_req_op_ctx(greq));
+    ret = read_and_lock_node(m_root_node_id, root, locktype_t::READ, locktype_t::READ, get_req_op_ctx(greq));
     if (ret != btree_status_t::success) { goto out; }
 
     ret = do_get(root, greq);
@@ -175,7 +180,7 @@ retry:
     btree_status_t status = btree_status_t::success;
 
     BtreeNodePtr< K > root;
-    status = read_and_lock_root(m_root_node_id, root, acq_lock, acq_lock, remove_req_op_ctx(rreq));
+    status = read_and_lock_node(m_root_node_id, root, acq_lock, acq_lock, remove_req_op_ctx(rreq));
     if (status != btree_status_t::success) { goto out; }
     is_leaf = root->is_leaf();
 
@@ -229,16 +234,13 @@ out:
 template < typename K, typename V >
 btree_status_t Btree< K, V >::remove(BtreeRemoveRequest& rreq) {
     locktype_t acq_lock = locktype_t::READ;
-    bool is_found = false;
-    bool is_leaf = false;
-
     m_btree_lock.lock_shared();
 
 retry:
     btree_status_t status = btree_status_t::success;
 
     BtreeNodePtr< K > root;
-    status = read_and_lock_root(m_root_node_id, root, acq_lock, acq_lock, remove_req_op_ctx(rreq));
+    status = read_and_lock_node(m_root_node_id, root, acq_lock, acq_lock, remove_req_op_ctx(rreq));
     if (status != btree_status_t::success) { goto out; }
 
     status = do_remove(root, acq_lock, rreq);
@@ -266,7 +268,7 @@ btree_status_t Btree< K, V >::query(BtreeQueryRequest& qreq, std::vector< std::p
 
     m_btree_lock.lock_shared();
     BtreeNodePtr< K > root = nullptr;
-    ret = read_and_lock_root(m_root_node_id, root, locktype_t::READ, locktype_t::READ, qreq.m_op_context);
+    ret = read_and_lock_node(m_root_node_id, root, locktype_t::READ, locktype_t::READ, qreq.m_op_context);
     if (ret != btree_status_t::success) { goto out; }
 
     switch (qreq.query_type()) {
