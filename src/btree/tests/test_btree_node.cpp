@@ -313,19 +313,19 @@ TYPED_TEST(NodeTest, Move) {
 
     this->m_node1->move_out_to_right_by_entries(this->m_cfg, *this->m_node2, list.size());
     this->m_node1->move_out_to_right_by_entries(this->m_cfg, *this->m_node2, list.size()); // Empty move
-    ASSERT_EQ(this->m_node1->get_total_entries(), 0u) << "Move out to right has failed";
-    ASSERT_EQ(this->m_node2->get_total_entries(), list.size()) << "Move out to right has failed";
+    ASSERT_EQ(this->m_node1->total_entries(), 0u) << "Move out to right has failed";
+    ASSERT_EQ(this->m_node2->total_entries(), list.size()) << "Move out to right has failed";
     this->validate_get_all();
 
     this->m_node1->move_in_from_right_by_entries(this->m_cfg, *this->m_node2, list.size());
     this->m_node1->move_in_from_right_by_entries(this->m_cfg, *this->m_node2, list.size()); // Empty move
-    ASSERT_EQ(this->m_node2->get_total_entries(), 0u) << "Move in from right has failed";
-    ASSERT_EQ(this->m_node1->get_total_entries(), list.size()) << "Move in from right has failed";
+    ASSERT_EQ(this->m_node2->total_entries(), 0u) << "Move in from right has failed";
+    ASSERT_EQ(this->m_node1->total_entries(), list.size()) << "Move in from right has failed";
     this->validate_get_all();
 
     this->m_node1->move_out_to_right_by_entries(this->m_cfg, *this->m_node2, list.size() / 2);
-    ASSERT_EQ(this->m_node1->get_total_entries(), list.size() / 2) << "Move out half entries to right has failed";
-    ASSERT_EQ(this->m_node2->get_total_entries(), list.size() - list.size() / 2)
+    ASSERT_EQ(this->m_node1->total_entries(), list.size() / 2) << "Move out half entries to right has failed";
+    ASSERT_EQ(this->m_node2->total_entries(), list.size() - list.size() / 2)
         << "Move out half entries to right has failed";
     this->validate_get_all();
     this->print();

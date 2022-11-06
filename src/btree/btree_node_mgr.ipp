@@ -12,32 +12,18 @@ namespace btree {
 template < typename K, typename V >
 std::pair< btree_status_t, bnodeid_t > Btree< K, V >::create_root_node(void* op_context) {
     // Assign one node as root node and also create a child leaf node and set it as edge
-    BtreeNodePtr< K > root = alloc_interior_node();
+    BtreeNodePtr< K > root = alloc_leaf_node();
     if (root == nullptr) { return std::make_pair(btree_status_t::space_not_avail, empty_bnodeid); }
 
-    BtreeNodePtr< K > child = alloc_leaf_node();
-    if (child == nullptr) {
+    auto ret = write_node(root, nullptr, op_context);
+    if (ret != btree_status_t::success) {
         free_node(root, locktype_t::NONE, op_context);
         return std::make_pair(btree_status_t::space_not_avail, empty_bnodeid);
     }
-
     m_root_node_id = root->get_node_id();
-
-    // Add the newly created child node as edge of root
-    root->set_edge_value(BtreeNodeInfo{child->get_node_id()});
-
-    // TODO: Need to update create_tree method with 2 nodes (instead of just root)
     create_tree_precommit(root, op_context);
 
-    auto ret = write_node(root, nullptr, op_context);
-    BT_DBG_ASSERT_EQ(ret, btree_status_t::success, "Writing root node failed");
-
-    if (ret == btree_status_t::success) {
-        ret = write_node(child, nullptr, op_context);
-        BT_DBG_ASSERT_EQ(ret, btree_status_t::success, "Writing first child node failed");
-    }
-
-    /* write an entry to the journal also */
+    // write an entry to the journal also
     return std::make_pair(ret, m_root_node_id);
 }
 
@@ -65,7 +51,7 @@ btree_status_t Btree< K, V >::get_child_and_lock_node(const BtreeNodePtr< K >& n
                                                       BtreeNodeInfo& child_info, BtreeNodePtr< K >& child_node,
                                                       locktype_t int_lock_type, locktype_t leaf_lock_type,
                                                       void* context) const {
-    if (index == node->get_total_entries()) {
+    if (index == node->total_entries()) {
         const auto& edge_id{node->get_edge_id()};
         child_info.set_bnode_id(edge_id);
         // If bsearch points to last index, it means the search has not found entry unless it is an edge value.
@@ -74,7 +60,7 @@ btree_status_t Btree< K, V >::get_child_and_lock_node(const BtreeNodePtr< K >& n
             return btree_status_t::not_found;
         }
     } else {
-        BT_NODE_LOG_ASSERT_LT(index, node->get_total_entries(), node);
+        BT_NODE_LOG_ASSERT_LT(index, node->total_entries(), node);
         node->get_nth_value(index, &child_info, false /* copy */);
     }
 
@@ -217,8 +203,7 @@ void Btree< K, V >::unlock_node(const BtreeNodePtr< K >& node, locktype_t type) 
 
 template < typename K, typename V >
 BtreeNodePtr< K > Btree< K, V >::alloc_leaf_node() {
-    bool is_new_allocation;
-    BtreeNodePtr< K > n = alloc_node(true /* is_leaf */, is_new_allocation);
+    BtreeNodePtr< K > n = alloc_node(true /* is_leaf */);
     if (n) {
         COUNTER_INCREMENT(m_metrics, btree_leaf_node_count, 1);
         ++m_total_nodes;
@@ -228,8 +213,7 @@ BtreeNodePtr< K > Btree< K, V >::alloc_leaf_node() {
 
 template < typename K, typename V >
 BtreeNodePtr< K > Btree< K, V >::alloc_interior_node() {
-    bool is_new_allocation;
-    BtreeNodePtr< K > n = alloc_node(false /* is_leaf */, is_new_allocation);
+    BtreeNodePtr< K > n = alloc_node(false /* is_leaf */);
     if (n) {
         COUNTER_INCREMENT(m_metrics, btree_int_node_count, 1);
         ++m_total_nodes;

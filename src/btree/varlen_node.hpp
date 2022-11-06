@@ -83,7 +83,7 @@ public:
         uint32_t i{0};
         // validate if keys are in ascending order
         K prevKey;
-        while (i < this->get_total_entries()) {
+        while (i < this->total_entries()) {
             K key = get_nth_key(i, false);
             uint64_t kp = *(uint64_t*)key.serialize().bytes;
             if (i > 0 && prevKey.compare(key) > 0) {
@@ -99,7 +99,7 @@ public:
      * Assumption: Node lock is already taken, size check for the node to support new value is already done */
     void update(uint32_t ind, const BtreeValue& val) override {
         // If we are updating the edge value, none of the other logic matter. Just update edge value and move on
-        if (ind == this->get_total_entries()) {
+        if (ind == this->total_entries()) {
             DEBUG_ASSERT_EQ(this->is_leaf(), false);
             this->set_edge_value(val);
             this->inc_gen();
@@ -112,10 +112,10 @@ public:
     // TODO - currently we do not support variable size key
     void update(uint32_t ind, const BtreeKey& key, const BtreeValue& val) override {
         LOGTRACEMOD(btree, "Update called:{}", to_string());
-        DEBUG_ASSERT_LE(ind, this->get_total_entries());
+        DEBUG_ASSERT_LE(ind, this->total_entries());
 
         // If we are updating the edge value, none of the other logic matter. Just update edge value and move on
-        if (ind == this->get_total_entries()) {
+        if (ind == this->total_entries()) {
             DEBUG_ASSERT_EQ(this->is_leaf(), false);
             this->set_edge_value(val);
             this->inc_gen();
@@ -156,12 +156,12 @@ public:
 
     // ind_s and ind_e are inclusive
     void remove(uint32_t ind_s, uint32_t ind_e) override {
-        uint32_t total_entries = this->get_total_entries();
+        uint32_t total_entries = this->total_entries();
         assert(total_entries >= ind_s);
         assert(total_entries >= ind_e);
         uint32_t recSize = this->get_record_size();
         uint32_t no_of_elem = ind_e - ind_s + 1;
-        if (ind_e == this->get_total_entries()) {
+        if (ind_e == this->total_entries()) {
             assert(!this->is_leaf() && this->has_valid_edge());
 
             V last_1_val;
@@ -178,7 +178,7 @@ public:
                 get_var_node_header()->m_available_space += get_nth_key_len(i) + get_nth_value_len(i) + recSize;
             }
             uint8_t* rec_ptr = get_nth_record_mutable(ind_s);
-            memmove(rec_ptr, rec_ptr + recSize * no_of_elem, (this->get_total_entries() - ind_e - 1) * recSize);
+            memmove(rec_ptr, rec_ptr + recSize * no_of_elem, (this->total_entries() - ind_e - 1) * recSize);
 
             this->sub_entries(no_of_elem);
         }
@@ -187,7 +187,7 @@ public:
 
     /*V get(uint32_t ind, bool copy) const {
         // Need edge index
-        if (ind == this->get_total_entries()) {
+        if (ind == this->total_entries()) {
             assert(!this->is_leaf());
             assert(this->has_valid_edge());
             return this->get_edge_value();
@@ -201,7 +201,7 @@ public:
         const auto this_gen = this->get_gen();
         const auto other_gen = other.get_gen();
 
-        const auto this_nentries = this->get_total_entries();
+        const auto this_nentries = this->total_entries();
         nentries = std::min(nentries, this_nentries);
         if (nentries == 0) { return 0; /* Nothing to move */ }
 
@@ -228,7 +228,7 @@ public:
             --ind;
         }
 
-        if (!this->is_leaf() && (other.get_total_entries() != 0)) {
+        if (!this->is_leaf() && (other.total_entries() != 0)) {
             // Incase this node is an edge node, move the stick to the right hand side node
             other.set_edge_id(this->get_edge_id());
             this->invalidate_edge();
@@ -250,7 +250,7 @@ public:
         auto this_gen = this->get_gen();
         auto other_gen = other.get_gen();
 
-        uint32_t ind = this->get_total_entries() - 1;
+        uint32_t ind = this->total_entries() - 1;
         while (ind > 0) {
             sisl::blob kb;
             kb.bytes = (uint8_t*)get_nth_obj(ind);
@@ -270,9 +270,9 @@ public:
             }
             size_to_move -= sz;
         }
-        remove(ind + 1, this->get_total_entries() - 1);
+        remove(ind + 1, this->total_entries() - 1);
 
-        if (!this->is_leaf() && (other.get_total_entries() != 0)) {
+        if (!this->is_leaf() && (other.total_entries() != 0)) {
             // Incase this node is an edge node, move the stick to the right hand side node
             other.set_edge_id(this->get_edge_id());
             this->invalidate_edge();
@@ -287,13 +287,80 @@ public:
         return moved_size;
     }
 
-    uint32_t move_in_from_right_by_entries(const BtreeConfig& cfg, BtreeNode< K >& o, uint32_t nentries) override {
+    uint32_t num_entries_by_size(uint32_t start_idx, uint32_t size) const override {
+        auto idx = start_idx;
+        uint32_t cum_size{0};
+
+        while (idx < this->total_entries()) {
+            uint32_t const rec_size = this->get_record_size() + get_nth_key_len(idx) + get_nth_value_len(idx);
+            cum_size += rec_size;
+            if (cum_size > size) { break; }
+            ++idx;
+        }
+
+        return idx - start_idx;
+    }
+
+    uint32_t copy_by_size(const BtreeConfig& cfg, const BtreeNode< K >& o, uint32_t start_idx,
+                          uint32_t copy_size) override {
+        auto& other = static_cast< const VariableNode& >(o);
+        auto this_gen = this->get_gen();
+
+        auto idx = start_idx;
+        uint32_t n = 0;
+        while (idx < other.total_entries()) {
+            blob kb{(uint8_t*)other.get_nth_obj(idx), other.get_nth_key_len(idx)};
+            blob vb{kb.bytes + kb.size, other.get_nth_value_len(idx)};
+
+            // We reached threshold of how much we could move
+            if ((kb.size + vb.size + other.get_record_size()) > copy_size) { break; }
+
+            auto sz = insert(this->total_entries(), kb, vb);
+            if (sz == 0) { break; }
+            ++n;
+            ++idx;
+        }
+        this->set_gen(this_gen + 1);
+
+        // If we copied everything from start_idx till end and if its an edge node, need to copy the edge id as well.
+        if (other.has_valid_edge() && ((start_idx + n) == other.total_entries())) {
+            this->set_edge_id(other.get_edge_id());
+        }
+        return n;
+    }
+
+    uint32_t copy_by_entries(const BtreeConfig& cfg, const BtreeNode< K >& o, uint32_t start_idx,
+                             uint32_t nentries) override {
+        auto& other = static_cast< const VariableNode& >(o);
+        auto this_gen = this->get_gen();
+
+        auto idx = start_idx;
+        uint32_t n = 0;
+        while (n < nentries) {
+            blob kb{(uint8_t*)other.get_nth_obj(idx), other.get_nth_key_len(idx)};
+            blob vb{kb.bytes + kb.size, other.get_nth_value_len(idx)};
+
+            auto sz = insert(this->total_entries(), kb, vb);
+            if (sz == 0) { break; }
+            ++n;
+            ++idx;
+        }
+        this->set_gen(this_gen + 1);
+
+        // If we copied everything from start_idx till end and if its an edge node, need to copy the edge id as well.
+        if (other.has_valid_edge() && ((start_idx + n) == other.total_entries())) {
+            this->set_edge_id(other.get_edge_id());
+        }
+        return n;
+    }
+
+    /*uint32_t move_in_from_right_by_entries(const BtreeConfig& cfg, BtreeNode< K >& o, uint32_t nentries) override {
         auto& other = static_cast< VariableNode& >(o);
         auto this_gen = this->get_gen();
         auto other_gen = other.get_gen();
-        nentries = std::min(nentries, other.get_total_entries());
+        nentries = std::min(nentries, other.total_entries());
 
-        if (nentries == 0) { return 0; /* Nothing to move */ }
+        if (nentries == 0) { return 0; }
         uint32_t other_ind = 0;
         while (nentries) {
             // Get the ith key and value blob and then remove the entry from here and insert to the other node
@@ -305,16 +372,16 @@ public:
             vb.bytes = kb.bytes + kb.size;
             vb.size = other.get_nth_value_len(other_ind);
 
-            auto sz = insert(this->get_total_entries(), kb, vb);
+            auto sz = insert(this->total_entries(), kb, vb);
             if (!sz) { break; }
             --nentries;
             ++other_ind;
         }
 
         other.remove(0, other_ind - 1); // Remove all entries in bulk
-        assert(other.get_total_entries() == nentries);
+        assert(other.total_entries() == nentries);
 
-        if (!other.is_leaf() && (other.get_total_entries() == 0)) {
+        if (!other.is_leaf() && (other.total_entries() == 0)) {
             // Incase other node is an edge node and we moved all the data into this node, move over the edge info as
             // well.
             this->set_edge_id(other.get_edge_id());
@@ -337,7 +404,7 @@ public:
         auto other_gen = other.get_gen();
 
         uint32_t ind = 0;
-        while (ind < this->get_total_entries()) {
+        while (ind < this->total_entries()) {
             sisl::blob kb;
             kb.bytes = (uint8_t*)other.get_nth_obj(ind);
             kb.size = other.get_nth_key_len(ind);
@@ -350,7 +417,7 @@ public:
                 // We reached threshold of how much we could move
                 break;
             }
-            auto sz = insert(this->get_total_entries(), kb, vb); // Keep on inserting on the last index.
+            auto sz = insert(this->total_entries(), kb, vb); // Keep on inserting on the last index.
             if (!sz) break;
             moved_size += sz;
             ind++;
@@ -358,7 +425,7 @@ public:
         }
         if (ind) other.remove(0, ind - 1);
 
-        if (!other.is_leaf() && (other.get_total_entries() == 0)) {
+        if (!other.is_leaf() && (other.total_entries() == 0)) {
             // Incase other node is an edge node and we moved all the data into this node, move over the edge info as
             // well.
             this->set_edge_id(other.get_edge_id());
@@ -372,7 +439,8 @@ public:
         other.set_gen(other_gen + 1);
 
         return moved_size;
-    }
+    } */
+
     void append(uint32_t ind, const BtreeKey& key, const BtreeValue& val) override {
         RELEASE_ASSERT(false, "Append operation is not supported on var node");
     }
@@ -385,7 +453,7 @@ public:
 
     void set_nth_key(uint32_t ind, const BtreeKey& key) {
         const auto kb = key.serialize();
-        assert(ind < this->get_total_entries());
+        assert(ind < this->total_entries());
         assert(kb.size == get_nth_key_len(ind));
         memcpy(uintptr_cast(get_nth_obj(ind)), kb.bytes, kb.size);
     }
@@ -396,7 +464,7 @@ public:
     virtual void set_nth_value_len(uint8_t* rec_ptr, uint16_t value_len) = 0;
 
     K get_nth_key(uint32_t ind, bool copy) const {
-        assert(ind < this->get_total_entries());
+        assert(ind < this->total_entries());
         sisl::blob b{const_cast< uint8_t* >(get_nth_obj(ind)), get_nth_key_len(ind)};
         return K{b, copy};
     }
@@ -407,7 +475,7 @@ public:
     }
 
     /*V get_nth_value(uint32_t ind, bool copy) const {
-        assert(ind < this->get_total_entries());
+        assert(ind < this->total_entries());
         sisl::blob b{const_cast< uint8_t* >(get_nth_obj(ind)) + get_nth_key_len(ind), get_nth_value_len(ind)};
         return V{b, copy};
     }*/
@@ -416,12 +484,12 @@ public:
         auto str = fmt::format(
             "{}id={} nEntries={} {} free_space={} ",
             (print_friendly ? "---------------------------------------------------------------------\n" : ""),
-            this->get_node_id(), this->get_total_entries(), (this->is_leaf() ? "LEAF" : "INTERIOR"),
+            this->get_node_id(), this->total_entries(), (this->is_leaf() ? "LEAF" : "INTERIOR"),
             get_var_node_header_const()->m_available_space);
         if (!this->is_leaf() && (this->has_valid_edge())) {
             fmt::format_to(std::back_inserter(str), "edge_id={} ", this->get_edge_id());
         }
-        for (uint32_t i{0}; i < this->get_total_entries(); ++i) {
+        for (uint32_t i{0}; i < this->total_entries(); ++i) {
             V val;
             get_nth_value(i, &val, false);
             fmt::format_to(std::back_inserter(str), "{}Entry{} [Key={} Val={}]", (print_friendly ? "\n\t" : " "), i + 1,
@@ -440,7 +508,7 @@ public:
 
 protected:
     uint32_t insert(uint32_t ind, const sisl::blob& key_blob, const sisl::blob& val_blob) {
-        assert(ind <= this->get_total_entries());
+        assert(ind <= this->total_entries());
         LOGTRACEMOD(btree, "{}:{}:{}:{}", ind, get_var_node_header()->tail_offset(), get_arena_free_space(),
                     get_var_node_header()->available_space());
         uint16_t obj_size = key_blob.size + val_blob.size;
@@ -461,7 +529,7 @@ protected:
         // Create a room for a new record
         uint8_t* rec_ptr = uintptr_cast(get_nth_record_mutable(ind));
         memmove((void*)(rec_ptr + this->get_record_size()), rec_ptr,
-                (this->get_total_entries() - ind) * this->get_record_size());
+                (this->total_entries() - ind) * this->get_record_size());
 
         // Move up the tail area
         assert(get_var_node_header()->m_tail_arena_offset > obj_size);
@@ -507,7 +575,7 @@ protected:
             uint16_t orig_record_index;
         };
 
-        uint32_t no_of_entries = this->get_total_entries();
+        uint32_t no_of_entries = this->total_entries();
         if (no_of_entries == 0) {
             // this happens when  there is only entry and in update, we first remove and than insert
             get_var_node_header()->m_tail_arena_offset = get_var_node_header()->m_init_available_space;
@@ -595,7 +663,7 @@ protected:
 
     uint16_t get_arena_free_space() const {
         return get_var_node_header_const()->m_tail_arena_offset - sizeof(var_node_header) -
-            (this->get_total_entries() * this->get_record_size());
+            (this->total_entries() * this->get_record_size());
     }
 };
 

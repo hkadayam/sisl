@@ -33,12 +33,12 @@ node_find_result_t BtreeNode::find(const BtreeSearchRange& range, BtreeKey* outk
     LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}", m_pers_header.to_string());
 
     auto result = bsearch_node(range);
-    if (result.end_of_search_index == (int)get_total_entries() && !has_valid_edge()) {
+    if (result.end_of_search_index == (int)total_entries() && !has_valid_edge()) {
         assert(!result.found);
         return result;
     }
 
-    if (get_total_entries() == 0) {
+    if (total_entries() == 0) {
         assert(has_valid_edge() || is_leaf());
         if (is_leaf()) {
             /* Leaf doesn't have any elements */
@@ -69,7 +69,7 @@ uint32_t BtreeNode::get_all(const BtreeSearchRange& range, uint32_t max_count, i
     start_ind = result.end_of_search_index;
 
     if (!range.is_start_inclusive()) {
-        if (start_ind < (int)get_total_entries()) {
+        if (start_ind < (int)total_entries()) {
             /* start is not inclusive so increment the start_ind if it is same as this key */
             int x = to_variant_node_const()->compare_nth_key(*range.get_start_key(), start_ind);
             if (x == 0) { start_ind++; }
@@ -78,12 +78,12 @@ uint32_t BtreeNode::get_all(const BtreeSearchRange& range, uint32_t max_count, i
         }
     }
 
-    if (start_ind == (int)get_total_entries() && is_leaf()) {
+    if (start_ind == (int)total_entries() && is_leaf()) {
         end_ind = start_ind;
         return 0; // no result found
     }
 
-    assert((start_ind < (int)get_total_entries()) || has_valid_edge());
+    assert((start_ind < (int)total_entries()) || has_valid_edge());
 
     // search by the end index
     BtreeSearchRange er = range.get_end_of_range();
@@ -96,7 +96,7 @@ uint32_t BtreeNode::get_all(const BtreeSearchRange& range, uint32_t max_count, i
     /* we don't support end exclusive */
     assert(range.is_end_inclusive());
 
-    if (end_ind == (int)get_total_entries() && !has_valid_edge()) { --end_ind; }
+    if (end_ind == (int)total_entries() && !has_valid_edge()) { --end_ind; }
 
     if (is_leaf()) {
         /* Decrement the end indx if range doesn't overlap with the start of key at end indx */
@@ -118,8 +118,8 @@ uint32_t BtreeNode::get_all(const BtreeSearchRange& range, uint32_t max_count, i
     if (count > max_count) { count = max_count; }
 
     /* We should always find the entries in interior node */
-    assert(start_ind < (int)get_total_entries() || has_valid_edge());
-    assert(end_ind < (int)get_total_entries() || has_valid_edge());
+    assert(start_ind < (int)total_entries() || has_valid_edge());
+    assert(end_ind < (int)total_entries() || has_valid_edge());
 
     if (out_values == nullptr) { return count; }
 
@@ -127,7 +127,7 @@ uint32_t BtreeNode::get_all(const BtreeSearchRange& range, uint32_t max_count, i
     for (auto i = start_ind; i < (int)(start_ind + count); ++i) {
         K key;
         V value;
-        if (i == (int)get_total_entries() && !is_leaf())
+        if (i == (int)total_entries() && !is_leaf())
             get_edge_value(&value); // invalid key in case of edge entry for internal node
         else {
             get_nth_key(i, &key, true);
@@ -196,8 +196,8 @@ bool BtreeNode::is_merge_needed(const BtreeConfig& cfg) const {
 }
 
 void BtreeNode::get_last_key(BtreeKey* out_lastkey) const {
-    if (get_total_entries() == 0) { return; }
-    return get_nth_key(get_total_entries() - 1, out_lastkey, true);
+    if (total_entries() == 0) { return; }
+    return get_nth_key(total_entries() - 1, out_lastkey, true);
 }
 
 void BtreeNode::get_var_nth_key(int i, BtreeKey* out_firstkey) const { return get_nth_key(i, out_firstkey, true); }
@@ -250,7 +250,7 @@ void BtreeNode::get_adjacent_indicies(uint32_t cur_ind, vector< int >& indices_l
     uint32_t i = 0;
     uint32_t start_ind;
     uint32_t end_ind;
-    uint32_t nentries = this->get_total_entries();
+    uint32_t nentries = this->total_entries();
 
     auto max_ind = ((max_indices / 2) - 1 + (max_indices % 2));
     end_ind = cur_ind + (max_indices / 2);
@@ -273,18 +273,18 @@ void BtreeNode::get_adjacent_indicies(uint32_t cur_ind, vector< int >& indices_l
 
 node_find_result_t BtreeNode::bsearch_node(const BtreeSearchRange& range) const {
     DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
-    const auto ret = bsearch(-1, get_total_entries(), range);
+    const auto ret = bsearch(-1, total_entries(), range);
     const auto selection = range.multi_option();
 
-    if (ret.found) { assert(ret.end_of_search_index < (int)get_total_entries() && ret.end_of_search_index > -1); }
+    if (ret.found) { assert(ret.end_of_search_index < (int)total_entries() && ret.end_of_search_index > -1); }
 
     /* BEST_FIT_TO_CLOSEST is used by remove only. Remove doesn't support range_remove. Until
      * then we have the special logic :
      */
     if (selection == MultiMatchOption::BEST_FIT_TO_CLOSEST_FOR_REMOVE) {
         if (!ret.found && is_leaf()) {
-            if (get_total_entries() != 0) {
-                ret.end_of_search_index = get_total_entries() - 1;
+            if (total_entries() != 0) {
+                ret.end_of_search_index = total_entries() - 1;
                 ret.found = true;
             }
         }
@@ -324,7 +324,7 @@ node_find_result_t BtreeNode::bsearch(int start, int end, const BtreeSearchRange
 
     while ((end - start) > 1) {
         mid = start + (end - start) / 2;
-        assert(mid >= 0 && mid < (int)get_total_entries());
+        assert(mid >= 0 && mid < (int)total_entries());
         int x = range.is_simple_search() ? to_variant_node_const()->compare_nth_key(*range.get_start_key(), mid)
                                          : to_variant_node_const()->compare_nth_key_range(range, mid);
         if (x == 0) {

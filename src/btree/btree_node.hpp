@@ -114,7 +114,7 @@ public:
                          get_persistent_header_const()->to_string());
 
         auto [found, idx] = bsearch_node(key);
-        if (idx == get_total_entries()) {
+        if (idx == total_entries()) {
             if (!has_valid_edge() || is_leaf()) {
                 DEBUG_ASSERT_EQ(found, false);
                 return std::make_pair(found, idx);
@@ -127,65 +127,41 @@ public:
     }
 
     template < typename V >
-    uint32_t get_all(const BtreeKeyRange& range, uint32_t max_count, uint32_t& start_ind, uint32_t& end_ind,
+    uint32_t get_all(const BtreeKeyRange& range, uint32_t max_count, uint32_t& start_idx, uint32_t& end_idx,
                      std::vector< std::pair< K, V > >* out_values = nullptr) const {
         LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}",
                          get_persistent_header_const()->to_string());
         auto count = 0U;
-
+        bool sfound, efound;
         // Get the start index of the search range.
-        const auto [sfound, sind] = bsearch_node(range.start_key());
-
-        start_ind = sind;
-        if (!range.is_start_inclusive()) {
-            if (start_ind < get_total_entries()) {
-                /* start is not inclusive so increment the start_ind if it is same as this key */
-                const int x = compare_nth_key(range.start_key(), start_ind);
-                if (x == 0) { ++start_ind; }
+        std::tie(sfound, start_idx) = bsearch_node(range.start_key());
+        if (sfound && !range.is_start_inclusive()) { ++start_idx; }
+        if (start_idx == total_entries()) {
+            end_idx = start_idx;
+            if (is_leaf() || !has_valid_edge()) {
+                return 0; // No result found
             } else {
-                DEBUG_ASSERT(is_leaf() || has_valid_edge(), "Invalid node");
+                goto out;
             }
         }
 
-        if (start_ind == get_total_entries() && is_leaf()) {
-            end_ind = start_ind;
-            return 0; // no result found
+        std::tie(efound, end_idx) = bsearch_node(range.end_key());
+        if (efound && !range.is_end_inclusive()) {
+            if (end_idx == 0) { return 0; }
+            --end_idx;
         }
-        DEBUG_ASSERT((start_ind < get_total_entries()) || has_valid_edge(), "Invalid node");
-
-        // search by the end index
-        const auto [efound, eind] = bsearch_node(range.end_key());
-        end_ind = eind;
-
-        if (end_ind == get_total_entries() && !has_valid_edge()) { --end_ind; }
-        if (is_leaf()) {
-            /* Decrement the end indx if range doesn't overlap with the start of key at end indx */
-            K key = get_nth_key(end_ind, false);
-            if ((range.start_key().compare(key) < 0) && ((range.end_key().compare(key)) < 0)) {
-                if (start_ind == end_ind) { return 0; /* no match */ }
-                --end_ind;
-            }
+        if (end_idx == total_entries()) {
+            DEBUG_ASSERT_GT(end_idx, 0); // At this point end_idx should never have been zero
+            if (!has_valid_edge()) { --end_idx; }
         }
 
-        /* We should always find the entries in interior node */
-        DEBUG_ASSERT_LE(start_ind, end_ind);
-        // DEBUG_ASSERT_EQ(range.is_end_inclusive(), true); /* we don't support end exclusive */
-        DEBUG_ASSERT(start_ind < get_total_entries() || has_valid_edge(), "Invalid node");
-
-        count = std::min(end_ind - start_ind + 1, max_count);
-        if (out_values == nullptr) { return count; }
-
-        /* get the keys and values */
-        for (auto i{start_ind}; i < (start_ind + count); ++i) {
-            add_nth_obj_to_list< V >(i, out_values, true);
-#if 0
-            if (i == get_total_entries() && !is_leaf()) {
-                // invalid key in case of edge entry for internal node
-                out_values->emplace_back(std::make_pair(K{}, get_edge_value()));
-            } else {
-                out_values->emplace_back(std::make_pair(K{}, get_nth_value(i, true)));
+    out:
+        count = std::min(end_idx - start_idx + 1, max_count);
+        if (out_values) {
+            /* get the keys and values */
+            for (auto i{start_idx}; i < (start_idx + count); ++i) {
+                add_nth_obj_to_list< V >(i, out_values, true);
             }
-#endif
         }
         return count;
     }
@@ -209,7 +185,7 @@ public:
         if (sfound && ((mm_opt == MultiMatchOption::DO_NOT_CARE) || (mm_opt == MultiMatchOption::LEFT_MOST))) {
             result_idx = start_idx;
             goto found_result;
-        } else if (start_idx == get_total_entries()) {
+        } else if (start_idx == total_entries()) {
             DEBUG_ASSERT(is_leaf() || has_valid_edge(), "Invalid node");
             return std::make_pair(false, 0); // out_of_range
         }
@@ -313,7 +289,7 @@ public:
         uint32_t i = 0;
         uint32_t start_ind;
         uint32_t end_ind;
-        uint32_t nentries = get_total_entries();
+        uint32_t nentries = total_entries();
 
         auto max_ind = ((max_indices / 2) - 1 + (max_indices % 2));
         end_ind = cur_ind + (max_indices / 2);
@@ -334,6 +310,23 @@ public:
         }
     }
 
+    K min_of(const K& cmp_key, uint32_t cmp_ind, bool& is_cmp_key_lesser) const {
+        K min_key;
+        int x{-1};
+        is_cmp_key_lesser = false;
+
+        if (cmp_ind < total_entries()) {
+            min_key = get_nth_key(cmp_ind, false);
+            x = cmp_key.compare(min_key);
+        }
+
+        if (x < 0) {
+            min_key = cmp_key;
+            is_cmp_key_lesser = true;
+        }
+        return min_key;
+    }
+
     BtreeKeyRange get_subrange(const BtreeKeyRange& inp_range, int upto_ind) const {
 #ifndef NDEBUG
         if (upto_ind > 0) {
@@ -347,7 +340,7 @@ public:
         bool end_inc = true;
         K end_key;
 
-        if (upto_ind < int_cast(get_total_entries())) {
+        if (upto_ind < int_cast(total_entries())) {
             end_key = get_nth_key(upto_ind, false);
             if (end_key.compare(inp_range.end_key()) >= 0) {
                 /* this is last index to process as end of range is smaller then key in this node */
@@ -370,14 +363,14 @@ public:
     }
 
     K get_last_key() const {
-        if (get_total_entries() == 0) { return K{}; }
-        return get_nth_key(get_total_entries() - 1, true);
+        if (total_entries() == 0) { return K{}; }
+        return get_nth_key(total_entries() - 1, true);
     }
 
     K get_first_key() const { return get_nth_key(0, true); }
 
     bool validate_key_order() const {
-        for (auto i = 1u; i < get_total_entries(); ++i) {
+        for (auto i = 1u; i < total_entries(); ++i) {
             auto prevKey = get_nth_key(i - 1, false);
             auto curKey = get_nth_key(i, false);
             if (prevKey.compare(curKey) >= 0) {
@@ -398,7 +391,8 @@ public:
 
     void invalidate_edge() { set_edge_id(empty_bnodeid); }
 
-    uint32_t get_total_entries() const { return get_persistent_header_const()->nentries; }
+    uint32_t total_entries() const { return get_persistent_header_const()->nentries; }
+    // uint32_t total_entries() const { return (has_valid_edge() ? total_entries() + 1 : total_entries()); }
 
     void lock(locktype_t l) const {
         if (l == locktype_t::READ) {
@@ -436,7 +430,7 @@ public:
         vec->emplace_back(kv);
 
         auto* pkv = &vec->back();
-        if (ind == get_total_entries() && !is_leaf()) {
+        if (ind == total_entries() && !is_leaf()) {
             pkv->second = edge_value_internal< V >();
         } else {
             pkv->first = get_nth_key(ind, copy);
@@ -448,9 +442,14 @@ public:
     // Public method which needs to be implemented by variants
     virtual uint32_t move_out_to_right_by_entries(const BtreeConfig& cfg, BtreeNode& other_node, uint32_t nentries) = 0;
     virtual uint32_t move_out_to_right_by_size(const BtreeConfig& cfg, BtreeNode& other_node, uint32_t size) = 0;
-    virtual uint32_t move_in_from_right_by_entries(const BtreeConfig& cfg, BtreeNode& other_node,
+    virtual uint32_t num_entries_by_size(uint32_t start_idx, uint32_t size) const = 0;
+    virtual uint32_t copy_by_size(const BtreeConfig& cfg, const BtreeNode& other_node, uint32_t start_idx,
+                                  uint32_t size) = 0;
+    virtual uint32_t copy_by_entries(const BtreeConfig& cfg, const BtreeNode& other_node, uint32_t start_idx,
+                                     uint32_t nentries) = 0;
+    /*virtual uint32_t move_in_from_right_by_entries(const BtreeConfig& cfg, BtreeNode& other_node,
                                                    uint32_t nentries) = 0;
-    virtual uint32_t move_in_from_right_by_size(const BtreeConfig& cfg, BtreeNode& other_node, uint32_t size) = 0;
+    virtual uint32_t move_in_from_right_by_size(const BtreeConfig& cfg, BtreeNode& other_node, uint32_t size) = 0;*/
     virtual uint32_t get_available_size(const BtreeConfig& cfg) const = 0;
     virtual std::string to_string(bool print_friendly = false) const = 0;
     virtual void get_nth_value(uint32_t ind, BtreeValue* out_val, bool copy) const = 0;
@@ -476,8 +475,8 @@ public:
 private:
     node_find_result_t bsearch_node(const BtreeKey& key) const {
         DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
-        auto [found, idx] = bsearch(-1, get_total_entries(), key);
-        if (found) { DEBUG_ASSERT_LT(idx, get_total_entries()); }
+        auto [found, idx] = bsearch(-1, total_entries(), key);
+        if (found) { DEBUG_ASSERT_LT(idx, total_entries()); }
 
         return std::make_pair(found, idx);
     }
@@ -490,7 +489,7 @@ private:
         if ((end - start) <= 1) { return std::make_pair(found, end_of_search_index); }
         while ((end - start) > 1) {
             mid = start + (end - start) / 2;
-            DEBUG_ASSERT(mid >= 0 && mid < int_cast(get_total_entries()), "Invalid mid={}", mid);
+            DEBUG_ASSERT(mid >= 0 && mid < int_cast(total_entries()), "Invalid mid={}", mid);
             int x = compare_nth_key(key, mid);
             if (x == 0) {
                 found = true;

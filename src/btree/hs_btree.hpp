@@ -110,7 +110,7 @@ class HSBtree : public Btree< K, V > {
 
         K prev_key;
         bool success = true;
-        for (uint32_t i = 0; i < my_node->get_total_entries(); ++i) {
+        for (uint32_t i = 0; i < my_node->total_entries(); ++i) {
             K key;
             my_node->get_nth_key(i, &key, false);
             if (!my_node->is_leaf()) {
@@ -137,16 +137,16 @@ class HSBtree : public Btree< K, V > {
             prev_key = key;
         }
 
-        if (my_node->is_leaf() && my_node->get_total_entries() == 0) {
+        if (my_node->is_leaf() && my_node->total_entries() == 0) {
             /* this node has zero entries */
             goto exit_on_error;
         }
-        if (parent_node && parent_node->get_total_entries() != indx) {
+        if (parent_node && parent_node->total_entries() != indx) {
             K parent_key;
             parent_node->get_nth_key(indx, &parent_key, false);
 
             K last_key;
-            my_node->get_nth_key(my_node->get_total_entries() - 1, &last_key, false);
+            my_node->get_nth_key(my_node->total_entries() - 1, &last_key, false);
             if (!my_node->is_leaf()) {
                 BT_LOG_ASSERT_CMP(last_key.compare(&parent_key), ==, 0, parent_node,
                                   "last key {} parent_key {} child {}", last_key.to_string(), parent_key.to_string(),
@@ -194,7 +194,7 @@ class HSBtree : public Btree< K, V > {
         }
 
         if (my_node->has_valid_edge()) {
-            success = verify_node(my_node->get_edge_id(), my_node, my_node->get_total_entries(), update_debug_bm);
+            success = verify_node(my_node->get_edge_id(), my_node, my_node->total_entries(), update_debug_bm);
             if (!success) { goto exit_on_error; }
         }
 
@@ -312,7 +312,7 @@ class HSBtree : public Btree< K, V > {
         /* if it is not found than end_of_search_index points to first ind which is greater than split key */
         auto split_ind = ret.end_of_search_index;
         if (ret.found) { ++split_ind; } // we don't want to move split key */
-        if (child_node1->is_leaf() && split_ind < (int)child_node1->get_total_entries()) {
+        if (child_node1->is_leaf() && split_ind < (int)child_node1->total_entries()) {
             K key;
             child_node1->get_nth_key(split_ind, &key, false);
 
@@ -333,7 +333,7 @@ class HSBtree : public Btree< K, V > {
                 ++split_ind;
             }
         }
-        child_node1->move_out_to_right_by_entries(m_cfg, child_node2, child_node1->get_total_entries() - split_ind);
+        child_node1->move_out_to_right_by_entries(m_cfg, child_node2, child_node1->total_entries() - split_ind);
 
         child_node2->set_next_bnode(child_node1->next_bnode());
         child_node2->set_gen(j_child_nodes[1]->node_gen());

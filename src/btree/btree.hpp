@@ -80,8 +80,13 @@ public:
           on_kv_remove_t&& remove_cb = nullptr);
     virtual ~Btree();
     virtual btree_status_t init(void* op_context);
-    btree_status_t put(BtreeMutateRequest& put_req);
-    btree_status_t get(BtreeGetRequest& greq) const;
+
+    template < typename ReqT >
+    btree_status_t put(ReqT& put_req);
+
+    template < typename ReqT >
+    btree_status_t get(ReqT& get_req) const;
+
     btree_status_t remove(BtreeRemoveRequest& rreq);
     btree_status_t query(BtreeQueryRequest& query_req, std::vector< std::pair< K, V > >& out_values) const;
     // bool verify_tree(bool update_debug_bm) const;
@@ -98,8 +103,7 @@ public:
 
 protected:
     /////////////////////////// Methods the underlying store is expected to handle ///////////////////////////
-    virtual BtreeNodePtr< K > alloc_node(bool is_leaf, bool& is_new_allocation,
-                                         const BtreeNodePtr< K >& copy_from = nullptr) = 0;
+    virtual BtreeNodePtr< K > alloc_node(bool is_leaf) = 0;
     virtual BtreeNode< K >* init_node(uint8_t* node_buf, bnodeid_t id, bool init_buf, bool is_leaf);
     virtual btree_status_t read_node_impl(bnodeid_t id, BtreeNodePtr< K >& bnode) const = 0;
     virtual btree_status_t write_node_impl(const BtreeNodePtr< K >& bn, const BtreeNodePtr< K >& dependent_bn,
@@ -176,17 +180,26 @@ private:
     //////////////////////////////// Impl Methods //////////////////////////////////////////
 
     ///////// Mutate Impl Methods
-    btree_status_t do_put(const BtreeNodePtr< K >& my_node, locktype_t curlock, BtreeMutateRequest& req);
-    btree_status_t mutate_write_leaf_node(const BtreeNodePtr< K >& my_node, BtreeMutateRequest& req);
-    btree_status_t mutate_extents_in_leaf(const BtreeNodePtr< K >& my_node, BtreeRangePutRequest& rpreq);
-    btree_status_t check_split_root(BtreeMutateRequest& req);
+    template < typename ReqT >
+    btree_status_t do_put(const BtreeNodePtr< K >& my_node, locktype_t curlock, ReqT& req);
+
+    template < typename ReqT >
+    btree_status_t mutate_write_leaf_node(const BtreeNodePtr< K >& my_node, ReqT& req);
+
+    template < typename ReqT >
+    btree_status_t check_split_root(ReqT& req);
+
+    template < typename ReqT >
+    bool is_split_needed(const BtreeNodePtr< K >& node, const BtreeConfig& cfg, ReqT& req) const;
+
     btree_status_t split_node(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node,
                               uint32_t parent_ind, BtreeKey* out_split_key, bool root_split, void* context);
-    bool is_split_needed(const BtreeNodePtr< K >& node, const BtreeConfig& cfg, BtreeMutateRequest& req) const;
-    btree_status_t get_start_and_end_ind(const BtreeNodePtr< K >& node, BtreeMutateRequest& req, int& start_ind,
-                                         int& end_ind);
+    btree_status_t mutate_extents_in_leaf(const BtreeNodePtr< K >& my_node, BtreeRangePutRequest& rpreq);
+    // btree_status_t get_start_and_end_ind(const BtreeNodePtr< K >& node, BtreeMutateRequest& req, int& start_ind,
+    //                                      int& end_ind);
 
     ///////// Remove Impl Methods
+    btree_status_t check_collapse_root(BtreeRemoveRequest& rreq);
     btree_status_t do_remove(const BtreeNodePtr< K >& my_node, locktype_t curlock, BtreeRemoveRequest& rreq);
     btree_status_t merge_nodes(const BtreeNodePtr< K >& parent_node, uint32_t start_indx, uint32_t end_indx,
                                void* context);
@@ -206,7 +219,8 @@ private:
 #endif
 
     ///////// Get Impl Methods
-    btree_status_t do_get(const BtreeNodePtr< K >& my_node, BtreeGetRequest& greq) const;
+    template < typename ReqT >
+    btree_status_t do_get(const BtreeNodePtr< K >& my_node, ReqT& greq) const;
 };
 } // namespace btree
 } // namespace sisl
