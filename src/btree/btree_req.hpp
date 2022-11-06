@@ -35,9 +35,9 @@ public:
     BtreeKeyRange next_range() const { return m_search_state.next_range(); }
 
     const BtreeKeyRange& current_sub_range() const { return m_search_state.current_sub_range(); }
-    void set_current_sub_range(const BtreeKeyRange& new_sub_range) {
+    /*void set_current_sub_range(const BtreeKeyRange& new_sub_range) {
         m_search_state.set_current_sub_range(new_sub_range);
-    }
+    }*/
     const BtreeKey& next_key() const { return m_search_state.next_key(); }
 
 protected:
@@ -77,7 +77,7 @@ public:
     std::unique_ptr< BtreeValue > m_newval;
 };
 
-using BtreeMutateRequest = std::variant< BtreeSinglePutRequest, BtreeRangePutRequest >;
+/*using BtreeMutateRequest = std::variant< BtreeSinglePutRequest, BtreeRangePutRequest >;
 
 static bool is_range_put_req(BtreeMutateRequest& req) { return (std::holds_alternative< BtreeRangePutRequest >(req)); }
 
@@ -89,7 +89,7 @@ static BtreeSinglePutRequest& to_single_put_req(BtreeMutateRequest& req) {
 
 static void* put_req_op_ctx(BtreeMutateRequest& req) {
     return (is_range_put_req(req)) ? to_range_put_req(req).m_op_context : to_single_put_req(req).m_op_context;
-}
+} */
 
 /////////////////////////// 2: Remove Operations /////////////////////////////////////
 struct BtreeSingleRemoveRequest : public BtreeRequest {
@@ -184,7 +184,7 @@ public:
 
 using BtreeGetRequest = std::variant< BtreeSingleGetRequest, BtreeGetAnyRequest >;
 
-static bool is_get_any_request(BtreeGetRequest& req) { return (std::holds_alternative< BtreeGetAnyRequest >(req)); }
+/*static bool is_get_any_request(BtreeGetRequest& req) { return (std::holds_alternative< BtreeGetAnyRequest >(req)); }
 
 static BtreeSingleGetRequest& to_single_get_req(BtreeGetRequest& req) { return std::get< BtreeSingleGetRequest >(req); }
 
@@ -192,7 +192,7 @@ static BtreeGetAnyRequest& to_get_any_req(BtreeGetRequest& req) { return std::ge
 
 static void* get_req_op_ctx(BtreeGetRequest& req) {
     return (is_get_any_request(req)) ? to_get_any_req(req).m_op_context : to_single_get_req(req).m_op_context;
-}
+}*/
 
 /////////////////////////// 4 Range Query Operations /////////////////////////////////////
 ENUM(BtreeQueryType, uint8_t,

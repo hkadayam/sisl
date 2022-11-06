@@ -80,7 +80,10 @@ std::pair< btree_status_t, uint64_t > Btree< K, V >::destroy_btree(void* context
 }
 
 template < typename K, typename V >
-btree_status_t Btree< K, V >::put(BtreeMutateRequest& put_req) {
+template < typename ReqT >
+btree_status_t Btree< K, V >::put(ReqT& put_req) {
+    static_assert(std::is_same_v< ReqT, BtreeSinglePutRequest > || std::is_same_v< ReqT, BtreeRangePutRequest >,
+                  "put api is called with non put request type");
     COUNTER_INCREMENT(m_metrics, btree_write_ops_count, 1);
     auto acq_lock = locktype_t::READ;
     bool is_leaf = false;
@@ -96,7 +99,7 @@ retry:
     BT_LOG_ASSERT_EQ(bt_thread_vars()->wr_locked_nodes.size(), 0);
 
     BtreeNodePtr< K > root;
-    ret = read_and_lock_node(m_root_node_id, root, acq_lock, acq_lock, put_req_op_ctx(put_req));
+    ret = read_and_lock_node(m_root_node_id, root, acq_lock, acq_lock, put_req.m_op_context);
     if (ret != btree_status_t::success) { goto out; }
     is_leaf = root->is_leaf();
 
@@ -148,13 +151,17 @@ out:
 }
 
 template < typename K, typename V >
-btree_status_t Btree< K, V >::get(BtreeGetRequest& greq) const {
+template < typename ReqT >
+btree_status_t Btree< K, V >::get(ReqT& greq) const {
+    static_assert(std::is_same_v< BtreeSingleGetRequest, ReqT > || std::is_same_v< BtreeGetAnyRequest, ReqT >,
+                  "get api is called with non get request type");
+
     btree_status_t ret = btree_status_t::success;
 
     m_btree_lock.lock_shared();
     BtreeNodePtr< K > root;
 
-    ret = read_and_lock_node(m_root_node_id, root, locktype_t::READ, locktype_t::READ, get_req_op_ctx(greq));
+    ret = read_and_lock_node(m_root_node_id, root, locktype_t::READ, locktype_t::READ, greq.m_op_context);
     if (ret != btree_status_t::success) { goto out; }
 
     ret = do_get(root, greq);
@@ -184,7 +191,7 @@ retry:
     if (status != btree_status_t::success) { goto out; }
     is_leaf = root->is_leaf();
 
-    if (root->get_total_entries() == 0) {
+    if (root->total_entries() == 0) {
         if (is_leaf) {
             // There are no entries in btree.
             unlock_node(root, acq_lock);
@@ -237,26 +244,52 @@ btree_status_t Btree< K, V >::remove(BtreeRemoveRequest& rreq) {
     m_btree_lock.lock_shared();
 
 retry:
-    btree_status_t status = btree_status_t::success;
-
+    btree_status_t ret = btree_status_t::success;
     BtreeNodePtr< K > root;
-    status = read_and_lock_node(m_root_node_id, root, acq_lock, acq_lock, remove_req_op_ctx(rreq));
-    if (status != btree_status_t::success) { goto out; }
+    ret = read_and_lock_node(m_root_node_id, root, acq_lock, acq_lock, remove_req_op_ctx(rreq));
+    if (ret != btree_status_t::success) { goto out; }
 
-    status = do_remove(root, acq_lock, rreq);
-    if (status == btree_status_t::retry) {
-        // Need to start from top down again, since
-        // there is a race between 2 inserts or deletes.
-        acq_lock = locktype_t::READ;
+    if (root->total_entries() == 0) {
+        if (root->is_leaf()) {
+            // There are no entries in btree.
+            unlock_node(root, acq_lock);
+            m_btree_lock.unlock_shared();
+            ret = btree_status_t::not_found;
+            goto out;
+        }
+
+        BT_NODE_LOG_ASSERT_EQ(root->has_valid_edge(), true, root, "Orphaned root with no entries and edge");
+        unlock_node(root, acq_lock);
+        m_btree_lock.unlock_shared();
+
+        ret = check_collapse_root(rreq);
+        if (ret != btree_status_t::success) {
+            LOGERROR("check collapse read failed btree name {}", m_bt_cfg.name());
+            goto out;
+        }
+
+        // We must have gotten a new root, need to start from scratch.
         goto retry;
+    } else if (root->is_leaf() && (acq_lock != locktype_t::WRITE)) {
+        // Root is a leaf, need to take write lock, instead of read, retry
+        unlock_node(root, acq_lock);
+        acq_lock = locktype_t::WRITE;
+        goto retry;
+    } else {
+        ret = do_remove(root, acq_lock, rreq);
+        if (ret == btree_status_t::retry) {
+            // Need to start from top down again, since there was a merge nodes in-between
+            acq_lock = locktype_t::READ;
+            goto retry;
+        }
     }
+    m_btree_lock.unlock_shared();
 
 out:
-    m_btree_lock.unlock_shared();
 #ifndef NDEBUG
     check_lock_debug();
 #endif
-    return status;
+    return ret;
 }
 
 template < typename K, typename V >

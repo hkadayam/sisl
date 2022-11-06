@@ -20,35 +20,30 @@ btree_status_t Btree< K, V >::do_sweep_query(BtreeNodePtr< K >& my_node, BtreeQu
                 my_node = next_node;
             }
 
-            BT_NODE_LOG(TRACE, my_node, "Query leaf node");
-
-            uint32_t start_ind = 0u, end_ind = 0u;
+            uint32_t start_ind{0};
+            uint32_t end_ind{0};
             auto cur_count =
-                my_node->get_all(qreq.next_range(), qreq.batch_size() - count, start_ind, end_ind, &out_values);
-
-            if (cur_count == 0) {
-                // if we've covered all key range, we are done now;
-                if (my_node->get_last_key().compare(qreq.input_range().end_key()) >= 0) { break; }
-            } else {
-                for (auto idx{start_ind}; idx < (start_ind + cur_count); ++idx) {
-                    call_on_read_kv_cb(my_node, idx, qreq);
-                    // my_node->add_nth_obj_to_list(idx, &out_values, true);
-                }
-                count += cur_count;
+                my_node->template get_all< V >(qreq.next_range(), qreq.batch_size() - count, start_ind, end_ind);
+            for (auto idx{start_ind}; idx < (start_ind + cur_count); ++idx) {
+                call_on_read_kv_cb(my_node, idx, qreq);
+                my_node->add_nth_obj_to_list(idx, &out_values, true);
             }
+            count += cur_count;
 
-            // if cur_count is 0, keep querying sibling nodes;
-            if (ret == btree_status_t::success && (count < qreq.batch_size())) {
+            // If this is not the last entry found, then surely we have reached the end of search criteria
+            if ((end_ind + 1) < my_node->total_entries()) { break; }
+
+            // Keep querying sibling nodes
+            if (count < qreq.batch_size()) {
+                // Before reading a sibling node, validate if the current node last key is already same as end key. This
+                // avoids reading from a sibling node.
+                if (my_node->get_last_key().compare(qreq.input_range().end_key()) >= 0) { break; }
                 if (my_node->next_bnode() == empty_bnodeid) { break; }
-                ret = read_and_lock_node(my_node->next_bnode(), next_node, locktype_t::READ, locktype_t::READ, nullptr);
-                if (ret == btree_status_t::fast_path_not_possible) { break; }
-
-                if (ret != btree_status_t::success) {
-                    LOGERROR("read failed btree name {}", m_bt_cfg.name());
-                    break;
-                }
+                ret = read_and_lock_node(my_node->next_bnode(), next_node, locktype_t::READ, locktype_t::READ,
+                                         qreq.m_op_context);
+                if (ret != btree_status_t::success) { break; }
             } else {
-                if (count >= qreq.batch_size()) { ret = btree_status_t::has_more; }
+                ret = btree_status_t::has_more;
                 break;
             }
         } while (true);
@@ -62,7 +57,8 @@ btree_status_t Btree< K, V >::do_sweep_query(BtreeNodePtr< K >& my_node, BtreeQu
     ASSERT_IS_VALID_INTERIOR_CHILD_INDX(isfound, idx, my_node);
 
     BtreeNodePtr< K > child_node;
-    ret = read_and_lock_node(start_child_info.bnode_id(), child_node, locktype_t::READ, locktype_t::READ, nullptr);
+    ret = read_and_lock_node(start_child_info.bnode_id(), child_node, locktype_t::READ, locktype_t::READ,
+                             qreq.m_op_context);
     unlock_node(my_node, locktype_t::READ);
     if (ret != btree_status_t::success) { return ret; }
     return (do_sweep_query(child_node, qreq, out_values));
@@ -100,9 +96,9 @@ btree_status_t Btree< K, V >::do_traversal_query(const BtreeNodePtr< K >& my_nod
     auto [end_is_found, end_idx] = my_node->find(qreq.input_range().end_key(), nullptr, false);
     bool unlocked_already = false;
 
-    if (start_idx == my_node->get_total_entries() && !(my_node->has_valid_edge())) {
+    if (start_idx == my_node->total_entries() && !(my_node->has_valid_edge())) {
         goto done; // no results found
-    } else if (end_idx == my_node->get_total_entries() && !(my_node->has_valid_edge())) {
+    } else if (end_idx == my_node->total_entries() && !(my_node->has_valid_edge())) {
         --end_idx; // end is not valid
     }
 

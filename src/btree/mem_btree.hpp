@@ -36,14 +36,7 @@ public:
     std::string btree_store_type() const override { return "MEM_BTREE"; }
 
 private:
-    BtreeNodePtr< K > alloc_node(bool is_leaf, bool& is_new_allocation, /* is alloced same as copy_from */
-                                 const BtreeNodePtr< K >& copy_from = nullptr) override {
-        if (copy_from != nullptr) {
-            is_new_allocation = false;
-            return copy_from;
-        }
-
-        is_new_allocation = true;
+    BtreeNodePtr< K > alloc_node(bool is_leaf) override {
         uint8_t* node_buf = new uint8_t[this->m_bt_cfg.node_size()];
         auto new_node = this->init_node(node_buf, bnodeid_t{0}, true, is_leaf);
         new_node->set_node_id(bnodeid_t{r_cast< std::uintptr_t >(new_node)});

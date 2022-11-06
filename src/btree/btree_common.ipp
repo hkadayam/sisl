@@ -39,8 +39,8 @@ btree_status_t Btree< K, V >::post_order_traversal(const BtreeNodePtr< K >& node
 
     if (!node->is_leaf()) {
         BtreeNodeInfo child_info;
-        while (i <= node->get_total_entries()) {
-            if (i == node->get_total_entries()) {
+        while (i <= node->total_entries()) {
+            if (i == node->total_entries()) {
                 if (!node->has_valid_edge()) { break; }
                 child_info.set_bnode_id(node->get_edge_id());
             } else {
@@ -97,7 +97,7 @@ uint64_t Btree< K, V >::get_child_node_cnt(bnodeid_t bnodeid) const {
     if (read_and_lock_node(bnodeid, node, acq_lock, acq_lock, nullptr) != btree_status_t::success) { return cnt; }
     if (!node->is_leaf()) {
         uint32_t i = 0;
-        while (i < node->get_total_entries()) {
+        while (i < node->total_entries()) {
             BtreeNodeInfo p = node->get(i, false);
             cnt += get_child_node_cnt(p.bnode_id()) + 1;
             ++i;
@@ -119,7 +119,7 @@ void Btree< K, V >::to_string(bnodeid_t bnodeid, std::string& buf) const {
 
     if (!node->is_leaf()) {
         uint32_t i = 0;
-        while (i < node->get_total_entries()) {
+        while (i < node->total_entries()) {
             BtreeNodeInfo p;
             node->get_nth_value(i, &p, false);
             to_string(p.bnode_id(), buf);
@@ -150,8 +150,8 @@ void Btree< K, V >::validate_sanity_child(const BtreeNodePtr< K >& parent_node, 
     BtreeNodePtr< K > child_node = nullptr;
     auto ret = read_node_impl(child_info.bnode_id(), child_node);
     BT_REL_ASSERT_EQ(ret, btree_status_t::success, "read failed, reason: {}", ret);
-    if (child_node->get_total_entries() == 0) {
-        auto parent_entries = parent_node->get_total_entries();
+    if (child_node->total_entries() == 0) {
+        auto parent_entries = parent_node->total_entries();
         if (!child_node->is_leaf()) { // leaf node or edge node can have 0 entries
             BT_REL_ASSERT_EQ(((parent_node->has_valid_edge() && ind == parent_entries)), true);
         }
@@ -160,7 +160,7 @@ void Btree< K, V >::validate_sanity_child(const BtreeNodePtr< K >& parent_node, 
     child_node->get_first_key(&child_first_key);
     child_node->get_last_key(&child_last_key);
     BT_REL_ASSERT_LE(child_first_key.compare(&child_last_key), 0);
-    if (ind == parent_node->get_total_entries()) {
+    if (ind == parent_node->total_entries()) {
         BT_REL_ASSERT_EQ(parent_node->has_valid_edge(), true);
         if (ind > 0) {
             parent_node->get_nth_key(ind - 1, &parent_key, false);
@@ -188,9 +188,9 @@ void Btree< K, V >::validate_sanity_next_child(const BtreeNodePtr< K >& parent_n
     K parent_key;
 
     if (parent_node->has_valid_edge()) {
-        if (ind == parent_node->get_total_entries()) { return; }
+        if (ind == parent_node->total_entries()) { return; }
     } else {
-        if (ind == parent_node->get_total_entries() - 1) { return; }
+        if (ind == parent_node->total_entries() - 1) { return; }
     }
     parent_node->get(ind + 1, &child_info, false /* copy */);
 
@@ -198,8 +198,8 @@ void Btree< K, V >::validate_sanity_next_child(const BtreeNodePtr< K >& parent_n
     auto ret = read_node_impl(child_info.bnode_id(), child_node);
     BT_REL_ASSERT_EQ(ret, btree_status_t::success, "read failed, reason: {}", ret);
 
-    if (child_node->get_total_entries() == 0) {
-        auto parent_entries = parent_node->get_total_entries();
+    if (child_node->total_entries() == 0) {
+        auto parent_entries = parent_node->total_entries();
         if (!child_node->is_leaf()) { // leaf node can have 0 entries
             BT_REL_ASSERT_EQ(((parent_node->has_valid_edge() && ind == parent_entries) || (ind = parent_entries - 1)),
                              true);
@@ -207,7 +207,7 @@ void Btree< K, V >::validate_sanity_next_child(const BtreeNodePtr< K >& parent_n
         return;
     }
     /* in case of merge next child will never have zero entries otherwise it would have been merged */
-    BT_NODE_REL_ASSERT_NE(child_node->get_total_entries(), 0, child_node);
+    BT_NODE_REL_ASSERT_NE(child_node->total_entries(), 0, child_node);
     child_node->get_first_key(&child_key);
     parent_node->get_nth_key(ind, &parent_key, false);
     BT_REL_ASSERT_GT(child_key.compare(&parent_key), 0)

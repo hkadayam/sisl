@@ -78,7 +78,9 @@ public:
 
     template < typename K >
     friend class BtreeKeyRangeSafe;
+
     BtreeKeyRange(const BtreeKeyRange& other) = default;
+    BtreeKeyRange& operator=(const BtreeKeyRange& other) = default;
 
     void set_multi_option(MultiMatchOption o) { m_multi_selector = o; }
     virtual const BtreeKey& start_key() const { return *m_input_start_key; }
@@ -192,9 +194,9 @@ public:
 
 template < typename K >
 class BtreeKeyRangeSafe : public BtreeKeyRange {
-private:
-    const K m_actual_start_key;
-    const K m_actual_end_key;
+public:
+    K m_actual_start_key;
+    K m_actual_end_key;
 
 public:
     BtreeKeyRangeSafe(const BtreeKey& start_key) :
@@ -229,6 +231,22 @@ public:
         } else {
             this->m_input_end_key = &m_actual_start_key;
         }
+    }
+
+    BtreeKeyRangeSafe& operator=(const BtreeKeyRange& other) {
+        this->m_start_incl = other.m_start_incl;
+        this->m_end_incl = other.m_end_incl;
+        this->m_multi_selector = other.m_multi_selector;
+        m_actual_start_key = *other.m_input_start_key;
+        this->m_input_start_key = &m_actual_start_key;
+
+        if (other.m_input_start_key != other.m_input_end_key) {
+            m_actual_end_key = *other.m_input_end_key;
+            this->m_input_end_key = &m_actual_end_key;
+        } else {
+            this->m_input_end_key = &m_actual_start_key;
+        }
+        return *this;
     }
 
     /******************* all functions are constant *************/
@@ -282,7 +300,8 @@ public:
 
     const BtreeKeyRange& input_range() const { return m_input_range; }
     const BtreeKeyRange& current_sub_range() const { return m_current_sub_range; }
-    void set_current_sub_range(const BtreeKeyRange& new_sub_range) { m_current_sub_range = new_sub_range; }
+    BtreeKeyRange& mutable_sub_range() { return m_current_sub_range; }
+    // void set_current_sub_range(const BtreeKeyRange& new_sub_range) { m_current_sub_range = new_sub_range; }
     const BtreeKey& next_key() const {
         return (m_cursor && m_cursor->m_last_key) ? *m_cursor->m_last_key : m_input_range.start_key();
     }

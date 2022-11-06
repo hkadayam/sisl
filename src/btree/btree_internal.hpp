@@ -173,8 +173,8 @@ namespace btree {
 #define BT_NODE_REL_ASSERT_GE(val1, val2, ...) BT_NODE_ASSERT_CMP(RELEASE, val1, >=, val2, ##__VA_ARGS__)
 
 #define ASSERT_IS_VALID_INTERIOR_CHILD_INDX(is_found, found_idx, node)                                                 \
-    BT_NODE_DBG_ASSERT((!is_found || ((int)found_idx < (int)node->get_total_entries()) || node->has_valid_edge()),     \
-                       node, "Is_valid_interior_child_check_failed: found_idx={}", found_idx)
+    BT_NODE_DBG_ASSERT((!is_found || ((int)found_idx < (int)node->total_entries()) || node->has_valid_edge()), node,   \
+                       "Is_valid_interior_child_check_failed: found_idx={}", found_idx)
 
 using bnodeid_t = uint64_t;
 static constexpr bnodeid_t empty_bnodeid = std::numeric_limits< bnodeid_t >::max();
@@ -199,6 +199,7 @@ struct BtreeConfig {
     uint8_t m_ideal_fill_pct{90};
     uint8_t m_split_pct{50};
     uint32_t m_rebalance_max_nodes{3};
+    uint32_t m_rebalance_turned_on{false};
 
     bool m_custom_kv{false}; // If Key/Value needs some transformation before read or write
     btree_node_type m_leaf_node_type{btree_node_type::VAR_OBJECT};

@@ -89,13 +89,13 @@ struct BtreeTest : public testing::Test {
     }
 
     void put(uint32_t k, btree_put_type put_type) {
-        std::unique_ptr< V > existing_v;
+        std::unique_ptr< V > existing_v = std::make_unique< V >();
 
-        BtreeMutateRequest req = BtreeSinglePutRequest{
-            std::make_unique< K >(k), std::make_unique< V >(V::generate_rand()), put_type, std::move(existing_v)};
-        bool done = (m_bt->put(req) == btree_status_t::success);
+        auto sreq = BtreeSinglePutRequest{std::make_unique< K >(k), std::make_unique< V >(V::generate_rand()), put_type,
+                                          std::move(existing_v)};
+        bool done = (m_bt->put(sreq) == btree_status_t::success);
 
-        auto& sreq = to_single_put_req(req);
+        // auto& sreq = to_single_put_req(req);
         bool expected_done{true};
         if (m_shadow_map.find(*sreq.m_k) != m_shadow_map.end()) {
             expected_done = (put_type != btree_put_type::INSERT_ONLY_IF_NOT_EXISTS);
@@ -112,8 +112,27 @@ struct BtreeTest : public testing::Test {
         }
     }
 
+    void range_put(uint32_t max_count) {
+        const auto num_entries = SISL_OPTIONS["num_entries"].as< uint32_t >();
+        static std::uniform_int_distribution< uint32_t > s_randkey_start_generator{1, num_entries};
+        auto val = std::make_unique< V >(V::generate_rand());
+
+        auto const start_it = m_shadow_map.lower_bound(K{s_randkey_start_generator(g_re)});
+        auto end_it = start_it;
+        auto it = start_it;
+        uint32_t count = 0;
+        while ((it != m_shadow_map.end()) && (count++ < max_count)) {
+            it->second = *val;
+            end_it = it++;
+        }
+
+        BtreeKeyRangeSafe< K > r{start_it->first, true, end_it->first, true};
+        auto mreq = BtreeRangePutRequest{BtreeSearchState{r}, btree_put_type::REPLACE_ONLY_IF_EXISTS, std::move(val)};
+        ASSERT_EQ(m_bt->put(mreq), btree_status_t::success);
+    }
+
     void remove_one(uint32_t k) {
-        std::unique_ptr< V > existing_v;
+        std::unique_ptr< V > existing_v = std::make_unique< V >();
         BtreeRemoveRequest req = BtreeSingleRemoveRequest{std::make_unique< K >(k), std::move(existing_v)};
         bool removed = (m_bt->remove(req) == btree_status_t::success);
 
@@ -172,39 +191,39 @@ struct BtreeTest : public testing::Test {
         for (const auto& [key, value] : m_shadow_map) {
             auto copy_key = std::make_unique< K >();
             *copy_key = key;
-            BtreeGetRequest req = BtreeSingleGetRequest{std::move(copy_key), std::make_unique< V >()};
-            BtreeSingleGetRequest& greq = to_single_get_req(req);
+            auto req = BtreeSingleGetRequest{std::move(copy_key), std::make_unique< V >()};
+            // BtreeSingleGetRequest& greq = to_single_get_req(req);
             const auto ret = m_bt->get(req);
             ASSERT_EQ(ret, btree_status_t::success) << "Missing key " << key << " in btree but present in shadow map";
-            ASSERT_EQ((const V&)greq.value(), value)
+            ASSERT_EQ((const V&)req.value(), value)
                 << "Found value in btree doesn't return correct data for key=" << key;
         }
     }
 
     void get_specific_validate(uint32_t k) const {
-        BtreeGetRequest req = BtreeSingleGetRequest{std::make_unique< K >(k), std::make_unique< V >()};
-        BtreeSingleGetRequest& greq = to_single_get_req(req);
+        auto req = BtreeSingleGetRequest{std::make_unique< K >(k), std::make_unique< V >()};
+        // BtreeSingleGetRequest& greq = to_single_get_req(req);
         const auto status = m_bt->get(req);
         if (status == btree_status_t::success) {
-            validate_data(greq.key(), (const V&)greq.value());
+            validate_data(req.key(), (const V&)req.value());
         } else {
-            ASSERT_EQ((m_shadow_map.find(greq.key()) == m_shadow_map.end()), true)
+            ASSERT_EQ((m_shadow_map.find(req.key()) == m_shadow_map.end()), true)
                 << "Node key " << k << " is missing in the btree";
         }
     }
 
     void get_any_validate(uint32_t start_k, uint32_t end_k) const {
         BtreeKeyRangeSafe< K > r{K{start_k}, true, K{end_k}, true};
-        BtreeGetRequest req = BtreeGetAnyRequest{std::move(r), std::make_unique< K >(), std::make_unique< V >()};
-        BtreeGetAnyRequest& gareq = to_get_any_req(req);
+        auto req = BtreeGetAnyRequest{std::move(r), std::make_unique< K >(), std::make_unique< V >()};
+        // BtreeGetAnyRequest& gareq = to_get_any_req(req);
         const auto status = m_bt->get(req);
         if (status == btree_status_t::success) {
-            ASSERT_EQ(found_in_range(*(K*)gareq.m_outkey.get(), start_k, end_k), true)
-                << "Get Any returned key=" << *(K*)gareq.m_outkey.get() << " which is not in range " << start_k << "-"
+            ASSERT_EQ(found_in_range(*(K*)req.m_outkey.get(), start_k, end_k), true)
+                << "Get Any returned key=" << *(K*)req.m_outkey.get() << " which is not in range " << start_k << "-"
                 << end_k << "according to shadow map";
-            validate_data(*(K*)gareq.m_outkey.get(), *(V*)gareq.m_outval.get());
+            validate_data(*(K*)req.m_outkey.get(), *(V*)req.m_outval.get());
         } else {
-            ASSERT_EQ(found_in_range(*(K*)gareq.m_outkey.get(), start_k, end_k), false)
+            ASSERT_EQ(found_in_range(*(K*)req.m_outkey.get(), start_k, end_k), false)
                 << "Get Any couldn't find key in the range " << start_k << "-" << end_k
                 << " but it present in shadow map";
         }
@@ -300,6 +319,29 @@ TYPED_TEST(BtreeTest, SequentialRemove) {
     for (uint32_t i{num_entries - 1}; i >= entries_iter1; --i) {
         this->remove_one(i);
     }
+
+    LOGINFO("Step 6: Query the empty tree");
+    this->query_validate(0, num_entries, 75);
+    this->get_any_validate(0, 1);
+    this->get_specific_validate(0);
+}
+
+TYPED_TEST(BtreeTest, RangeUpdate) {
+    // Forward sequential insert
+    const auto num_entries = SISL_OPTIONS["num_entries"].as< uint32_t >();
+    LOGINFO("Step 1: Do Forward sequential insert for {} entries", num_entries);
+    for (uint32_t i{0}; i < num_entries; ++i) {
+        this->put(i, btree_put_type::INSERT_ONLY_IF_NOT_EXISTS);
+    }
+
+    LOGINFO("Step 2: Do Range Update of random intervals between [1-50] for 100 times with random key ranges");
+    static std::uniform_int_distribution< uint32_t > s_rand_key_count_generator{1, 50};
+    for (uint32_t i{0}; i < 100; ++i) {
+        this->range_put(s_rand_key_count_generator(g_re));
+    }
+
+    LOGINFO("Step 2: Query {} entries and validate with pagination of 75 entries", num_entries);
+    this->query_validate(0, num_entries, 75);
 }
 
 int main(int argc, char* argv[]) {
