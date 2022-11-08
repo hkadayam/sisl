@@ -57,8 +57,8 @@ public:
         if (init) {
             // Tail arena points to the edge of the node as data arena grows backwards. Entire space is now available
             // except for the header itself
-            get_var_node_header()->m_init_available_space = BtreeNode< K >::node_area_size(cfg);
-            get_var_node_header()->m_tail_arena_offset = BtreeNode< K >::node_area_size(cfg);
+            get_var_node_header()->m_init_available_space = cfg.node_data_size();
+            get_var_node_header()->m_tail_arena_offset = cfg.node_data_size();
             get_var_node_header()->m_available_space =
                 get_var_node_header()->m_tail_arena_offset - sizeof(var_node_header);
         }
@@ -445,7 +445,7 @@ public:
         RELEASE_ASSERT(false, "Append operation is not supported on var node");
     }
 
-    uint32_t get_available_size(const BtreeConfig& cfg) const override {
+    uint32_t available_size(const BtreeConfig& cfg) const override {
         return get_var_node_header_const()->m_available_space;
     }
 
@@ -470,8 +470,14 @@ public:
     }
 
     void get_nth_value(uint32_t ind, BtreeValue* out_val, bool copy) const override {
-        sisl::blob b{const_cast< uint8_t* >(get_nth_obj(ind)) + get_nth_key_len(ind), get_nth_value_len(ind)};
-        out_val->deserialize(b, copy);
+        if (ind == this->total_entries()) {
+            DEBUG_ASSERT_EQ(this->is_leaf(), false, "get_nth_value out-of-bound");
+            DEBUG_ASSERT_EQ(this->has_valid_edge(), true, "get_nth_value out-of-bound");
+            *(BtreeNodeInfo*)out_val = this->get_edge_value();
+        } else {
+            sisl::blob b{const_cast< uint8_t* >(get_nth_obj(ind)) + get_nth_key_len(ind), get_nth_value_len(ind)};
+            out_val->deserialize(b, copy);
+        }
     }
 
     /*V get_nth_value(uint32_t ind, bool copy) const {

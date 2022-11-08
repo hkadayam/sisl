@@ -939,7 +939,7 @@ private:
 
         child_node2->set_next_bnode(child_node1->next_bnode());
         child_node1->set_next_bnode(child_node2->get_node_id());
-        uint32_t child1_filled_size = m_cfg.get_node_area_size() - child_node1->get_available_size(m_cfg);
+        uint32_t child1_filled_size = m_cfg.get_node_area_size() - child_node1->available_size(m_cfg);
 
         auto split_size = m_cfg.get_split_size(child1_filled_size);
         uint32_t res = child_node1->move_out_to_right_by_size(m_cfg, child_node2, split_size);
@@ -1233,7 +1233,7 @@ private:
             if (indx == start_indx) {
                 balanced_size = m_cfg.get_ideal_fill_size();
                 left_most_node = child;
-                if (left_most_node->get_occupied_size(m_cfg) > balanced_size) {
+                if (left_most_node->occupied_size(m_cfg) > balanced_size) {
                     /* first node doesn't have any free space. we can exit now */
                     ret = btree_status_t::merge_not_required;
                     goto out;
@@ -1274,7 +1274,7 @@ private:
         merge_node = left_most_node;
         /* We can not fail from this point. Nodes will be modified in memory. */
         for (uint32_t i = 0; i < new_nodes.size(); ++i) {
-            auto occupied_size = merge_node->get_occupied_size(m_cfg);
+            auto occupied_size = merge_node->occupied_size(m_cfg);
             if (occupied_size < balanced_size) {
                 uint32_t pull_size = balanced_size - occupied_size;
                 merge_node->move_in_from_right_by_size(m_cfg, new_nodes[i], pull_size);

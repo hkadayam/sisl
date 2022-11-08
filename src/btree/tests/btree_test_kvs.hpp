@@ -101,11 +101,11 @@ public:
     bool operator==(const TestFixedKey& other) const { return (compare(other) == 0); }
 
     uint32_t key() const { return m_key; }
-    uint32_t start_key(const BtreeKeyRange& range) const {
+    uint32_t start_key(const BtreeKeyRange< TestFixedKey >& range) const {
         const TestFixedKey& k = (const TestFixedKey&)(range.start_key());
         return k.m_key;
     }
-    uint32_t end_key(const BtreeKeyRange& range) const {
+    uint32_t end_key(const BtreeKeyRange< TestFixedKey >& range) const {
         const TestFixedKey& k = (const TestFixedKey&)(range.end_key());
         return k.m_key;
     }
@@ -132,6 +132,10 @@ public:
     TestVarLenKey(uint32_t k) : BtreeKey(), m_key{k} {}
     TestVarLenKey(const BtreeKey& other) : TestVarLenKey(other.serialize(), true) {}
     TestVarLenKey(const TestVarLenKey& other) = default;
+    TestVarLenKey(TestVarLenKey&& other) = default;
+    TestVarLenKey& operator=(const TestVarLenKey& other) = default;
+    TestVarLenKey& operator=(TestVarLenKey&& other) = default;
+
     TestVarLenKey(const sisl::blob& b, bool copy) : BtreeKey() {
         std::string data{r_cast< const char* >(b.bytes), b.size};
         std::stringstream ss;
@@ -193,11 +197,11 @@ public:
     bool operator==(const TestVarLenKey& other) const { return (compare(other) == 0); }
 
     uint32_t key() const { return m_key; }
-    uint32_t start_key(const BtreeKeyRange& range) const {
+    uint32_t start_key(const BtreeKeyRange< TestVarLenKey >& range) const {
         const TestVarLenKey& k = (const TestVarLenKey&)(range.start_key());
         return k.m_key;
     }
-    uint32_t end_key(const BtreeKeyRange& range) const {
+    uint32_t end_key(const BtreeKeyRange< TestVarLenKey >& range) const {
         const TestVarLenKey& k = (const TestVarLenKey&)(range.end_key());
         return k.m_key;
     }

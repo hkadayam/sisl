@@ -5,7 +5,7 @@ namespace sisl {
 namespace btree {
 
 template < typename K, typename V >
-btree_status_t Btree< K, V >::do_sweep_query(BtreeNodePtr< K >& my_node, BtreeQueryRequest& qreq,
+btree_status_t Btree< K, V >::do_sweep_query(BtreeNodePtr< K >& my_node, BtreeQueryRequest< K >& qreq,
                                              std::vector< std::pair< K, V > >& out_values) const {
     btree_status_t ret = btree_status_t::success;
     if (my_node->is_leaf()) {
@@ -65,7 +65,7 @@ btree_status_t Btree< K, V >::do_sweep_query(BtreeNodePtr< K >& my_node, BtreeQu
 }
 
 template < typename K, typename V >
-btree_status_t Btree< K, V >::do_traversal_query(const BtreeNodePtr< K >& my_node, BtreeQueryRequest& qreq,
+btree_status_t Btree< K, V >::do_traversal_query(const BtreeNodePtr< K >& my_node, BtreeQueryRequest< K >& qreq,
                                                  std::vector< std::pair< K, V > >& out_values) const {
     btree_status_t ret = btree_status_t::success;
     uint32_t idx;
@@ -222,7 +222,7 @@ btree_status_t do_serialzable_query(const BtreeNodePtr< K >& my_node, BtreeSeria
 #endif
 
 #ifdef SERIALIZABLE_QUERY_IMPLEMENTATION
-btree_status_t sweep_query(BtreeQueryRequest& qreq, std::vector< std::pair< K, V > >& out_values) {
+btree_status_t sweep_query(BtreeQueryRequest< K >& qreq, std::vector< std::pair< K, V > >& out_values) {
     COUNTER_INCREMENT(m_metrics, btree_read_ops_count, 1);
     qreq.init_batch_range();
 

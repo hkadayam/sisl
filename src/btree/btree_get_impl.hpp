@@ -11,7 +11,7 @@ btree_status_t Btree< K, V >::do_get(const BtreeNodePtr< K >& my_node, ReqT& gre
     uint32_t idx;
 
     if (my_node->is_leaf()) {
-        if constexpr (std::is_same_v< BtreeGetAnyRequest, ReqT >) {
+        if constexpr (std::is_same_v< BtreeGetAnyRequest< K >, ReqT >) {
             std::tie(found, idx) = my_node->get_any(greq.m_range, greq.m_outkey.get(), greq.m_outval.get(), true, true);
             if (found) { call_on_read_kv_cb(my_node, idx, greq); }
         } else if constexpr (std::is_same_v< BtreeSingleGetRequest, ReqT >) {
@@ -24,7 +24,7 @@ btree_status_t Btree< K, V >::do_get(const BtreeNodePtr< K >& my_node, ReqT& gre
     }
 
     BtreeNodeInfo child_info;
-    if constexpr (std::is_same_v< BtreeGetAnyRequest, ReqT >) {
+    if constexpr (std::is_same_v< BtreeGetAnyRequest< K >, ReqT >) {
         std::tie(found, idx) = my_node->find(greq.m_range.start_key(), &child_info, true);
     } else if constexpr (std::is_same_v< BtreeSingleGetRequest, ReqT >) {
         std::tie(found, idx) = my_node->find(greq.key(), &child_info, true);

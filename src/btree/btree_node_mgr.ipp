@@ -74,7 +74,7 @@ btree_status_t Btree< K, V >::write_node(const BtreeNodePtr< K >& node, const Bt
 
     COUNTER_INCREMENT_IF_ELSE(m_metrics, node->is_leaf(), btree_leaf_node_writes, btree_int_node_writes, 1);
     HISTOGRAM_OBSERVE_IF_ELSE(m_metrics, node->is_leaf(), btree_leaf_node_occupancy, btree_int_node_occupancy,
-                              ((m_node_size - node->get_available_size(m_bt_cfg)) * 100) / m_node_size);
+                              ((m_node_size - node->available_size(m_bt_cfg)) * 100) / m_node_size);
 
     return (write_node_impl(node, dep_node, context));
 }
