@@ -41,12 +41,7 @@ Btree< K, V >::Btree(const BtreeConfig& cfg, on_kv_read_t&& read_cb, on_kv_updat
         m_on_update_cb{std::move(update_cb)},
         m_on_remove_cb{std::move(remove_cb)},
         m_bt_cfg{cfg} {
-    // calculate number of nodes
-    const uint32_t node_area_size = BtreeNode< K >::node_area_size(cfg);
-    uint32_t max_leaf_nodes =
-        (m_bt_cfg.max_objs() * (m_bt_cfg.max_key_size() + m_bt_cfg.max_value_size())) / node_area_size + 1;
-    max_leaf_nodes += (100 * max_leaf_nodes) / 60;                      // Assume 60% btree full
-    m_max_nodes = max_leaf_nodes + ((double)max_leaf_nodes * 0.05) + 1; // Assume 5% for interior nodes
+    m_bt_cfg.set_node_data_size(cfg.node_size() - sizeof(persistent_hdr_t));
 }
 
 template < typename K, typename V >
@@ -82,7 +77,7 @@ std::pair< btree_status_t, uint64_t > Btree< K, V >::destroy_btree(void* context
 template < typename K, typename V >
 template < typename ReqT >
 btree_status_t Btree< K, V >::put(ReqT& put_req) {
-    static_assert(std::is_same_v< ReqT, BtreeSinglePutRequest > || std::is_same_v< ReqT, BtreeRangePutRequest >,
+    static_assert(std::is_same_v< ReqT, BtreeSinglePutRequest > || std::is_same_v< ReqT, BtreeRangePutRequest< K > >,
                   "put api is called with non put request type");
     COUNTER_INCREMENT(m_metrics, btree_write_ops_count, 1);
     auto acq_lock = locktype_t::READ;
@@ -153,7 +148,7 @@ out:
 template < typename K, typename V >
 template < typename ReqT >
 btree_status_t Btree< K, V >::get(ReqT& greq) const {
-    static_assert(std::is_same_v< BtreeSingleGetRequest, ReqT > || std::is_same_v< BtreeGetAnyRequest, ReqT >,
+    static_assert(std::is_same_v< BtreeSingleGetRequest, ReqT > || std::is_same_v< BtreeGetAnyRequest< K >, ReqT >,
                   "get api is called with non get request type");
 
     btree_status_t ret = btree_status_t::success;
@@ -174,79 +169,21 @@ out:
     return ret;
 }
 
-#if 0
 template < typename K, typename V >
-btree_status_t Btree< K, V >::remove(BtreeRemoveRequest& rreq) {
-    locktype_t acq_lock = locktype_t::READ;
-    bool is_found = false;
-    bool is_leaf = false;
+template < typename ReqT >
+btree_status_t Btree< K, V >::remove(ReqT& req) {
+    static_assert(std::is_same_v< ReqT, BtreeSingleRemoveRequest > ||
+                      std::is_same_v< ReqT, BtreeRangeRemoveRequest< K > > ||
+                      std::is_same_v< ReqT, BtreeRemoveAnyRequest< K > >,
+                  "remove api is called with non remove request type");
 
-    m_btree_lock.lock_shared();
-
-retry:
-    btree_status_t status = btree_status_t::success;
-
-    BtreeNodePtr< K > root;
-    status = read_and_lock_node(m_root_node_id, root, acq_lock, acq_lock, remove_req_op_ctx(rreq));
-    if (status != btree_status_t::success) { goto out; }
-    is_leaf = root->is_leaf();
-
-    if (root->total_entries() == 0) {
-        if (is_leaf) {
-            // There are no entries in btree.
-            unlock_node(root, acq_lock);
-            status = btree_status_t::not_found;
-            BT_LOG(DEBUG, root, "entry not found in btree");
-            goto out;
-        }
-        BT_LOG_ASSERT(root->has_valid_edge(), root, "Invalid edge id");
-        unlock_node(root, acq_lock);
-        m_btree_lock.unlock_shared();
-
-        status = check_collapse_root(remove_req_op_ctx(rreq));
-        if (status != btree_status_t::success) {
-            LOGERROR("check collapse read failed btree name {}", m_bt_cfg.name());
-            goto out;
-        }
-
-        // We must have gotten a new root, need to
-        // start from scratch.
-        m_btree_lock.lock_shared();
-        goto retry;
-    } else if ((is_leaf) && (acq_lock != locktype_t::WRITE)) {
-        // Root is a leaf, need to take write lock, instead
-        // of read, retry
-        unlock_node(root, acq_lock);
-        acq_lock = locktype_t::WRITE;
-        goto retry;
-    } else {
-        status = do_remove(root, acq_lock, rreq);
-        if (status == btree_status_t::retry) {
-            // Need to start from top down again, since
-            // there is a race between 2 inserts or deletes.
-            acq_lock = locktype_t::READ;
-            goto retry;
-        }
-    }
-
-out:
-    m_btree_lock.unlock_shared();
-#ifndef NDEBUG
-    check_lock_debug();
-#endif
-    return status;
-}
-#endif
-
-template < typename K, typename V >
-btree_status_t Btree< K, V >::remove(BtreeRemoveRequest& rreq) {
     locktype_t acq_lock = locktype_t::READ;
     m_btree_lock.lock_shared();
 
 retry:
     btree_status_t ret = btree_status_t::success;
     BtreeNodePtr< K > root;
-    ret = read_and_lock_node(m_root_node_id, root, acq_lock, acq_lock, remove_req_op_ctx(rreq));
+    ret = read_and_lock_node(m_root_node_id, root, acq_lock, acq_lock, req.m_op_context);
     if (ret != btree_status_t::success) { goto out; }
 
     if (root->total_entries() == 0) {
@@ -262,7 +199,7 @@ retry:
         unlock_node(root, acq_lock);
         m_btree_lock.unlock_shared();
 
-        ret = check_collapse_root(rreq);
+        ret = check_collapse_root(req);
         if (ret != btree_status_t::success) {
             LOGERROR("check collapse read failed btree name {}", m_bt_cfg.name());
             goto out;
@@ -276,7 +213,7 @@ retry:
         acq_lock = locktype_t::WRITE;
         goto retry;
     } else {
-        ret = do_remove(root, acq_lock, rreq);
+        ret = do_remove(root, acq_lock, req);
         if (ret == btree_status_t::retry) {
             // Need to start from top down again, since there was a merge nodes in-between
             acq_lock = locktype_t::READ;
@@ -293,7 +230,7 @@ out:
 }
 
 template < typename K, typename V >
-btree_status_t Btree< K, V >::query(BtreeQueryRequest& qreq, std::vector< std::pair< K, V > >& out_values) const {
+btree_status_t Btree< K, V >::query(BtreeQueryRequest< K >& qreq, std::vector< std::pair< K, V > >& out_values) const {
     COUNTER_INCREMENT(m_metrics, btree_query_ops_count, 1);
 
     btree_status_t ret = btree_status_t::success;
@@ -326,7 +263,7 @@ btree_status_t Btree< K, V >::query(BtreeQueryRequest& qreq, std::vector< std::p
         /* if return is not success then set the cursor to last read. No need to set cursor if user is not
          * interested in it.
          */
-        qreq.search_state().set_cursor_key< K >(out_values.back().first);
+        qreq.set_cursor_key(out_values.back().first);
 
         /* check if we finished just at the last key */
         if (out_values.back().first.compare(qreq.input_range().end_key()) == 0) { ret = btree_status_t::success; }

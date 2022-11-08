@@ -126,23 +126,22 @@ struct BtreeTest : public testing::Test {
             end_it = it++;
         }
 
-        BtreeKeyRangeSafe< K > r{start_it->first, true, end_it->first, true};
-        auto mreq = BtreeRangePutRequest{BtreeSearchState{r}, btree_put_type::REPLACE_ONLY_IF_EXISTS, std::move(val)};
+        auto mreq = BtreeRangePutRequest< K >{BtreeKeyRange< K >{start_it->first, true, end_it->first, true},
+                                              btree_put_type::REPLACE_ONLY_IF_EXISTS, std::move(val)};
         ASSERT_EQ(m_bt->put(mreq), btree_status_t::success);
     }
 
     void remove_one(uint32_t k) {
         std::unique_ptr< V > existing_v = std::make_unique< V >();
-        BtreeRemoveRequest req = BtreeSingleRemoveRequest{std::make_unique< K >(k), std::move(existing_v)};
-        bool removed = (m_bt->remove(req) == btree_status_t::success);
+        auto rreq = BtreeSingleRemoveRequest{std::make_unique< K >(k), std::move(existing_v)};
+        bool removed = (m_bt->remove(rreq) == btree_status_t::success);
 
-        auto& rsreq = to_single_remove_req(req);
-        bool expected_removed = (m_shadow_map.find(rsreq.key()) != m_shadow_map.end());
+        bool expected_removed = (m_shadow_map.find(rreq.key()) != m_shadow_map.end());
         ASSERT_EQ(removed, expected_removed) << "Expected remove of key " << k << " to be " << expected_removed;
 
         if (removed) {
-            validate_data(rsreq.key(), (const V&)rsreq.value());
-            m_shadow_map.erase(rsreq.key());
+            validate_data(rreq.key(), (const V&)rreq.value());
+            m_shadow_map.erase(rreq.key());
         }
     }
 
@@ -155,12 +154,11 @@ struct BtreeTest : public testing::Test {
 
     void query_validate(uint32_t start_k, uint32_t end_k, uint32_t batch_size) const {
         std::vector< std::pair< K, V > > out_vector;
-        BtreeKeyRangeSafe< K > r{K{start_k}, true, K{end_k}, true};
-        BtreeQueryRequest qreq{BtreeSearchState{r, true /* paginated_query */},
-                               BtreeQueryType::SWEEP_NON_INTRUSIVE_PAGINATION_QUERY, batch_size};
         uint32_t remaining = num_elems_in_range(start_k, end_k);
         auto it = m_shadow_map.lower_bound(K{start_k});
 
+        BtreeQueryRequest< K > qreq{BtreeKeyRange< K >{K{start_k}, true, K{end_k}, true},
+                                    BtreeQueryType::SWEEP_NON_INTRUSIVE_PAGINATION_QUERY, batch_size};
         while (remaining > 0) {
             out_vector.clear();
             auto const ret = m_bt->query(qreq, out_vector);
@@ -213,9 +211,8 @@ struct BtreeTest : public testing::Test {
     }
 
     void get_any_validate(uint32_t start_k, uint32_t end_k) const {
-        BtreeKeyRangeSafe< K > r{K{start_k}, true, K{end_k}, true};
-        auto req = BtreeGetAnyRequest{std::move(r), std::make_unique< K >(), std::make_unique< V >()};
-        // BtreeGetAnyRequest& gareq = to_get_any_req(req);
+        auto req = BtreeGetAnyRequest< K >{BtreeKeyRange< K >{K{start_k}, true, K{end_k}, true},
+                                           std::make_unique< K >(), std::make_unique< V >()};
         const auto status = m_bt->get(req);
         if (status == btree_status_t::success) {
             ASSERT_EQ(found_in_range(*(K*)req.m_outkey.get(), start_k, end_k), true)

@@ -197,8 +197,8 @@ public:
         return (get_nth_obj_size(0) * move_in_from_right_by_entries(cfg, o, size / get_nth_obj_size(0)));
     } */
 
-    uint32_t get_available_size(const BtreeConfig& cfg) const override {
-        return (BtreeNode< K >::node_area_size(cfg) - (this->total_entries() * get_nth_obj_size(0)));
+    uint32_t available_size(const BtreeConfig& cfg) const override {
+        return (cfg.node_data_size() - (this->total_entries() * get_nth_obj_size(0)));
     }
 
     K get_nth_key(uint32_t ind, bool copy) const override {
@@ -210,19 +210,17 @@ public:
     }
 
     void get_nth_value(uint32_t ind, BtreeValue* out_val, bool copy) const override {
-        DEBUG_ASSERT_LT(ind, this->total_entries(), "node={}", to_string());
-        sisl::blob b;
         if (ind == this->total_entries()) {
-            RELEASE_ASSERT_EQ(this->is_leaf(), false, "setting value outside bounds on leaf node");
+            DEBUG_ASSERT_EQ(this->is_leaf(), false, "setting value outside bounds on leaf node");
             DEBUG_ASSERT_EQ(this->has_valid_edge(), true, "node={}", to_string());
-            b.bytes = const_cast< uint8_t* >(reinterpret_cast< const uint8_t* >(this->get_edge_id()));
-            b.size = sizeof(bnodeid_t);
+            *(BtreeNodeInfo*)out_val = this->get_edge_value();
         } else {
+            sisl::blob b;
             b.bytes = const_cast< uint8_t* >(reinterpret_cast< const uint8_t* >(
                 this->node_data_area_const() + (get_nth_obj_size(ind) * ind) + get_obj_key_size(ind)));
             b.size = V::get_fixed_size();
+            out_val->deserialize(b, copy);
         }
-        return out_val->deserialize(b, copy);
     }
 
     /*V get_nth_value(uint32_t ind, bool copy) const {
@@ -297,9 +295,7 @@ public:
         }
     }
 
-    uint32_t get_available_entries(const BtreeConfig& cfg) const {
-        return get_available_size(cfg) / get_nth_obj_size(0);
-    }
+    uint32_t get_available_entries(const BtreeConfig& cfg) const { return available_size(cfg) / get_nth_obj_size(0); }
 
     inline uint32_t get_obj_key_size(uint32_t ind) const { return K::get_fixed_size(); }
 

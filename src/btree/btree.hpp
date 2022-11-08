@@ -45,7 +45,6 @@ class Btree {
 private:
     mutable folly::SharedMutexWritePriority m_btree_lock;
     bnodeid_t m_root_node_id{empty_bnodeid};
-    uint32_t m_max_nodes;
 
     BtreeMetrics m_metrics;
     std::atomic< bool > m_destroyed{false};
@@ -87,8 +86,11 @@ public:
     template < typename ReqT >
     btree_status_t get(ReqT& get_req) const;
 
-    btree_status_t remove(BtreeRemoveRequest& rreq);
-    btree_status_t query(BtreeQueryRequest& query_req, std::vector< std::pair< K, V > >& out_values) const;
+    template < typename ReqT >
+    btree_status_t remove(ReqT& rreq);
+
+    btree_status_t query(BtreeQueryRequest< K >& query_req, std::vector< std::pair< K, V > >& out_values) const;
+
     // bool verify_tree(bool update_debug_bm) const;
     virtual std::pair< btree_status_t, uint64_t > destroy_btree(void* context);
     nlohmann::json get_status(int log_level) const;
@@ -194,26 +196,30 @@ private:
 
     btree_status_t split_node(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node,
                               uint32_t parent_ind, BtreeKey* out_split_key, bool root_split, void* context);
-    btree_status_t mutate_extents_in_leaf(const BtreeNodePtr< K >& my_node, BtreeRangePutRequest& rpreq);
+    btree_status_t mutate_extents_in_leaf(const BtreeNodePtr< K >& my_node, BtreeRangePutRequest< K >& rpreq);
     // btree_status_t get_start_and_end_ind(const BtreeNodePtr< K >& node, BtreeMutateRequest& req, int& start_ind,
     //                                      int& end_ind);
 
     ///////// Remove Impl Methods
-    btree_status_t check_collapse_root(BtreeRemoveRequest& rreq);
-    btree_status_t do_remove(const BtreeNodePtr< K >& my_node, locktype_t curlock, BtreeRemoveRequest& rreq);
-    btree_status_t merge_nodes(const BtreeNodePtr< K >& parent_node, uint32_t start_indx, uint32_t end_indx,
-                               void* context);
-    bool remove_extents_in_leaf(const BtreeNodePtr< K >& node, BtreeRangeRemoveRequest& rrreq);
+    template < typename ReqT >
+    btree_status_t check_collapse_root(ReqT& rreq);
+
+    template < typename ReqT >
+    btree_status_t do_remove(const BtreeNodePtr< K >& my_node, locktype_t curlock, ReqT& rreq);
+
+    btree_status_t merge_nodes(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& leftmost_node,
+                               uint32_t start_indx, uint32_t end_indx, void* context);
+    bool remove_extents_in_leaf(const BtreeNodePtr< K >& node, BtreeRangeRemoveRequest< K >& rrreq);
 
     ///////// Query Impl Methods
-    btree_status_t do_sweep_query(BtreeNodePtr< K >& my_node, BtreeQueryRequest& qreq,
+    btree_status_t do_sweep_query(BtreeNodePtr< K >& my_node, BtreeQueryRequest< K >& qreq,
                                   std::vector< std::pair< K, V > >& out_values) const;
-    btree_status_t do_traversal_query(const BtreeNodePtr< K >& my_node, BtreeQueryRequest& qreq,
+    btree_status_t do_traversal_query(const BtreeNodePtr< K >& my_node, BtreeQueryRequest< K >& qreq,
                                       std::vector< std::pair< K, V > >& out_values) const;
 #ifdef SERIALIZABLE_QUERY_IMPLEMENTATION
     btree_status_t do_serialzable_query(const BtreeNodePtr< K >& my_node, BtreeSerializableQueryRequest& qreq,
                                         std::vector< std::pair< K, V > >& out_values);
-    btree_status_t sweep_query(BtreeQueryRequest& qreq, std::vector< std::pair< K, V > >& out_values);
+    btree_status_t sweep_query(BtreeQueryRequest< K >& qreq, std::vector< std::pair< K, V > >& out_values);
     btree_status_t serializable_query(BtreeSerializableQueryRequest& qreq,
                                       std::vector< std::pair< K, V > >& out_values);
 #endif

@@ -184,15 +184,15 @@ bool BtreeNode::verify_node(size_t size, verify_result& vr) const {
 bool BtreeNode::is_merge_needed(const BtreeConfig& cfg) const {
 #if 0
 #ifdef _PRERELEASE
-    if (homestore_flip->test_flip("btree_merge_node") && get_occupied_size(cfg) < cfg.get_node_area_size()) {
+    if (homestore_flip->test_flip("btree_merge_node") && occupied_size(cfg) < cfg.get_node_area_size()) {
         return true;
     }
 
     auto ret = homestore_flip->get_test_flip< uint64_t >("btree_merge_node_pct");
-    if (ret && get_occupied_size(cfg) < (ret.get() * cfg.get_node_area_size() / 100)) { return true; }
+    if (ret && occupied_size(cfg) < (ret.get() * cfg.get_node_area_size() / 100)) { return true; }
 #endif
 #endif
-    return (get_occupied_size(cfg) < get_suggested_min_size(cfg));
+    return (occupied_size(cfg) < get_suggested_min_size(cfg));
 }
 
 void BtreeNode::get_last_key(BtreeKey* out_lastkey) const {

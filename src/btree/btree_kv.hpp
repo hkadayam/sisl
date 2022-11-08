@@ -39,7 +39,6 @@ ENUM(btree_put_type, uint16_t,
      APPEND_IF_EXISTS_ELSE_INSERT)
 
 // The base class, btree library expects its key to be derived from
-class BtreeKeyRange;
 class BtreeKey {
 public:
     BtreeKey() = default;
@@ -66,6 +65,103 @@ public:
     virtual bool is_extent_key() const { return false; }
 };
 
+template < typename K >
+class BtreeTraversalState;
+
+template < typename K >
+class BtreeKeyRange {
+private:
+    K m_actual_start_key;
+    K m_actual_end_key;
+
+public:
+    K* m_input_start_key{&m_actual_start_key};
+    K* m_input_end_key{&m_actual_end_key};
+    bool m_start_incl{true};
+    bool m_end_incl{true};
+    MultiMatchOption m_multi_selector{MultiMatchOption::DO_NOT_CARE};
+
+    friend class BtreeTraversalState< K >;
+
+public:
+    BtreeKeyRange() = default;
+
+    BtreeKeyRange(const K& start_key, bool start_incl = true) :
+            m_actual_start_key{start_key},
+            m_input_start_key{&m_actual_start_key},
+            m_input_end_key{&m_actual_start_key},
+            m_start_incl{start_incl},
+            m_end_incl{true},
+            m_multi_selector{MultiMatchOption::DO_NOT_CARE} {}
+
+    BtreeKeyRange(const K& start_key, bool start_incl, const K& end_key, bool end_incl = true,
+                  MultiMatchOption option = MultiMatchOption::DO_NOT_CARE) :
+            m_actual_start_key{start_key},
+            m_actual_end_key{end_key},
+            m_input_start_key{&m_actual_start_key},
+            m_input_end_key{&m_actual_end_key},
+            m_start_incl{start_incl},
+            m_end_incl{end_incl},
+            m_multi_selector{option} {}
+
+    BtreeKeyRange(const K& start_key, const K& end_key) : BtreeKeyRange(start_key, true, end_key, true) {}
+
+    BtreeKeyRange(const BtreeKeyRange& other) { copy(other); }
+    BtreeKeyRange(BtreeKeyRange&& other) { do_move(std::move(other)); }
+    BtreeKeyRange& operator=(const BtreeKeyRange< K >& other) {
+        this->copy(other);
+        return *this;
+    }
+    BtreeKeyRange& operator=(BtreeKeyRange< K >&& other) {
+        this->do_move(std::move(other));
+        return *this;
+    }
+
+    void copy(const BtreeKeyRange< K >& other) {
+        m_actual_start_key = other.m_actual_start_key;
+        m_actual_end_key = other.m_actual_end_key;
+        m_input_start_key = &m_actual_start_key;
+        m_input_end_key =
+            (other.m_input_end_key == &other.m_actual_start_key) ? &m_actual_start_key : &m_actual_end_key;
+        m_start_incl = other.m_start_incl;
+        m_end_incl = other.m_end_incl;
+        m_multi_selector = other.m_multi_selector;
+    }
+
+    void do_move(BtreeKeyRange< K >&& other) {
+        m_input_start_key = &m_actual_start_key;
+        m_input_end_key =
+            (other.m_input_end_key == &other.m_actual_start_key) ? &m_actual_start_key : &m_actual_end_key;
+        m_actual_start_key = std::move(other.m_actual_start_key);
+        m_actual_end_key = std::move(other.m_actual_end_key);
+        m_start_incl = std::move(other.m_start_incl);
+        m_end_incl = std::move(other.m_end_incl);
+        m_multi_selector = std::move(other.m_multi_selector);
+    }
+
+    void set_multi_option(MultiMatchOption o) { m_multi_selector = o; }
+    const K& start_key() const { return *m_input_start_key; }
+    const K& end_key() const { return *m_input_end_key; }
+    bool is_start_inclusive() const { return m_start_incl; }
+    bool is_end_inclusive() const { return m_end_incl; }
+    MultiMatchOption multi_option() const { return m_multi_selector; }
+
+    void set_end_key(K&& key, bool incl) {
+        m_actual_end_key = std::move(key);
+        m_end_incl = incl;
+    }
+
+    std::string to_string() const {
+        return fmt::format("{}{}-{}{}", is_start_inclusive() ? '[' : '(', start_key().to_string(),
+                           end_key().to_string(), is_end_inclusive() ? ']' : ')');
+    }
+
+private:
+    const K& actual_start_key() const { return m_actual_start_key; }
+    const K& actual_end_key() const { return m_actual_end_key; }
+};
+
+/*
 class BtreeKeyRange {
 public:
     const BtreeKey* m_input_start_key{nullptr};
@@ -74,7 +170,7 @@ public:
     bool m_end_incl;
     MultiMatchOption m_multi_selector;
 
-    friend class BtreeSearchState;
+    friend class BtreeTraversalState;
 
     template < typename K >
     friend class BtreeKeyRangeSafe;
@@ -108,7 +204,7 @@ private:
             m_end_incl{start_incl},
             m_multi_selector{option} {}
 };
-
+*/
 /*
  * This type is for keys which is range in itself i.e each key is having its own
  * start() and end().
@@ -192,6 +288,7 @@ public:
     virtual bool is_equal_sized() const = 0;
 };
 
+#if 0
 template < typename K >
 class BtreeKeyRangeSafe : public BtreeKeyRange {
 public:
@@ -257,10 +354,12 @@ public:
         return BtreeKeyRangeSafe< K >(end_key(), is_end_inclusive(), multi_option());
     }
 };
+#endif
 
 struct BtreeLockTracker;
+template < typename K >
 struct BtreeQueryCursor {
-    std::unique_ptr< BtreeKey > m_last_key;
+    std::unique_ptr< K > m_last_key;
     std::unique_ptr< BtreeLockTracker > m_locked_nodes;
     BtreeQueryCursor() = default;
 
@@ -271,72 +370,56 @@ struct BtreeQueryCursor {
 // This class holds the current state of the search. This is where intermediate search state are stored
 // and it is mutated by the do_put and do_query methods. Expect the current_sub_range and cursor to keep
 // getting updated on calls.
-class BtreeSearchState {
+template < typename K >
+class BtreeTraversalState {
 protected:
-    const BtreeKeyRange m_input_range;
-    BtreeKeyRange m_current_sub_range;
-    std::unique_ptr< BtreeQueryCursor > m_cursor;
+    const BtreeKeyRange< K > m_input_range;
+    BtreeKeyRange< K > m_working_range;
+    BtreeKeyRange< K > m_next_range;
+    std::unique_ptr< BtreeQueryCursor< K > > m_cursor;
 
 public:
-    BtreeSearchState(const BtreeKeyRange& inp_range, bool paginated_query = false) :
-            m_input_range{inp_range}, m_current_sub_range{m_input_range} {
-        if (paginated_query) { m_cursor = std::make_unique< BtreeQueryCursor >(); }
+    BtreeTraversalState(BtreeKeyRange< K >&& inp_range, bool paginated_query = false) :
+            m_input_range{std::move(inp_range)}, m_working_range{m_input_range} {
+        if (paginated_query) { m_cursor = std::make_unique< BtreeQueryCursor< K > >(); }
     }
-    BtreeSearchState(const BtreeSearchState& other) = default;
-    BtreeSearchState(BtreeSearchState&& other) = default;
+    BtreeTraversalState(const BtreeTraversalState& other) = default;
+    BtreeTraversalState(BtreeTraversalState&& other) = default;
 
-    const BtreeQueryCursor* const_cursor() const { return m_cursor.get(); }
-    BtreeQueryCursor* cursor() { return m_cursor.get(); }
+    const BtreeQueryCursor< K >* const_cursor() const { return m_cursor.get(); }
+    BtreeQueryCursor< K >* cursor() { return m_cursor.get(); }
     bool is_cursor_valid() const { return (m_cursor != nullptr); }
 
-    template < typename K >
-    void set_cursor_key(const BtreeKey& end_key) {
-        if (!m_cursor) {
-            /* no need to set cursor as user doesn't want to keep track of it */
-            return;
-        }
+    void set_cursor_key(const K& end_key) {
+        // no need to set cursor as user doesn't want to keep track of it
+        if (!m_cursor) { return; }
         m_cursor->m_last_key = std::make_unique< K >(end_key);
     }
 
-    const BtreeKeyRange& input_range() const { return m_input_range; }
-    const BtreeKeyRange& current_sub_range() const { return m_current_sub_range; }
-    BtreeKeyRange& mutable_sub_range() { return m_current_sub_range; }
-    // void set_current_sub_range(const BtreeKeyRange& new_sub_range) { m_current_sub_range = new_sub_range; }
-    const BtreeKey& next_key() const {
+    const BtreeKeyRange< K >& input_range() const { return m_input_range; }
+    const BtreeKeyRange< K >& working_range() const { return m_working_range; }
+
+    // Returns the mutable reference to the end key, which caller can update it to trim down the end key
+    void trim_working_range(K&& end_key, bool end_incl) { m_working_range.set_end_key(std::move(end_key), end_incl); }
+
+    const K& next_key() const {
         return (m_cursor && m_cursor->m_last_key) ? *m_cursor->m_last_key : m_input_range.start_key();
     }
 
-#if 0
-    template < typename K >
-    BtreeKeyRangeSafe< K > next_start_range() const {
-        return BtreeKeyRangeSafe< K >(next_key(), is_start_inclusive(), m_input_range.multi_option());
-    }
-
-    template < typename K >
-    BtreeKeyRangeSafe< K > end_of_range() const {
-        return BtreeKeyRangeSafe< K >(m_input_range.end_key(), is_end_inclusive(), m_input_range.multi_option());
-    }
-#endif
-
-    BtreeKeyRange next_range() const {
+    const BtreeKeyRange< K >& next_range() {
         if (m_cursor && m_cursor->m_last_key) {
-            // Cursor next is always non-inclusive
-            return BtreeKeyRange(m_cursor->m_last_key.get(), false, &m_input_range.end_key(), is_end_inclusive(),
-                                 m_input_range.multi_option());
+            m_next_range = BtreeKeyRange< K >(*m_cursor->m_last_key, false, m_input_range.end_key(), is_end_inclusive(),
+                                              m_input_range.multi_option());
+            return m_next_range;
         } else {
-            return BtreeKeyRange(&m_input_range.start_key(), is_start_inclusive(), &m_input_range.end_key(),
-                                 is_end_inclusive(), m_input_range.multi_option());
+            return m_input_range;
         }
     }
 
 private:
     bool is_start_inclusive() const {
-        if (m_cursor && m_cursor->m_last_key) {
-            // cursor always have the last key not included
-            return false;
-        } else {
-            return m_input_range.is_start_inclusive();
-        }
+        // cursor always have the last key not included
+        return (m_cursor && m_cursor->m_last_key) ? false : m_input_range.is_start_inclusive();
     }
 
     bool is_end_inclusive() const { return m_input_range.is_end_inclusive(); }

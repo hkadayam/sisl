@@ -127,7 +127,7 @@ public:
     }
 
     template < typename V >
-    uint32_t get_all(const BtreeKeyRange& range, uint32_t max_count, uint32_t& start_idx, uint32_t& end_idx,
+    uint32_t get_all(const BtreeKeyRange< K >& range, uint32_t max_count, uint32_t& start_idx, uint32_t& end_idx,
                      std::vector< std::pair< K, V > >* out_values = nullptr) const {
         LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}",
                          get_persistent_header_const()->to_string());
@@ -166,7 +166,7 @@ public:
         return count;
     }
 
-    std::pair< bool, uint32_t > get_any(const BtreeKeyRange& range, BtreeKey* out_key, BtreeValue* out_val,
+    std::pair< bool, uint32_t > get_any(const BtreeKeyRange< K >& range, BtreeKey* out_key, BtreeValue* out_val,
                                         bool copy_key, bool copy_val) const {
         LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}",
                          get_persistent_header_const()->to_string());
@@ -265,7 +265,7 @@ public:
         return found;
     }
 
-    virtual bool remove_any(const BtreeKeyRange& range, BtreeKey* outkey, BtreeValue* outval) {
+    virtual bool remove_any(const BtreeKeyRange< K >& range, BtreeKey* outkey, BtreeValue* outval) {
         const auto [found, idx] = get_any(range, outkey, outval, true, true);
         if (found) {
             remove(idx);
@@ -327,10 +327,10 @@ public:
         return min_key;
     }
 
-    BtreeKeyRange get_subrange(const BtreeKeyRange& inp_range, int upto_ind) const {
+    /*BtreeKeyRange get_subrange(const BtreeKeyRange< K >& inp_range, int upto_ind) const {
 #ifndef NDEBUG
         if (upto_ind > 0) {
-            /* start of input range should always be more then the key in curr_ind - 1 */
+            // start of input range should always be more then the key in curr_ind - 1
             DEBUG_ASSERT_LE(get_nth_key(upto_ind - 1, false).compare(inp_range.start_key()), 0, "[node={}]",
                             to_string());
         }
@@ -343,14 +343,14 @@ public:
         if (upto_ind < int_cast(total_entries())) {
             end_key = get_nth_key(upto_ind, false);
             if (end_key.compare(inp_range.end_key()) >= 0) {
-                /* this is last index to process as end of range is smaller then key in this node */
+                // this is last index to process as end of range is smaller then key in this node
                 end_key = inp_range.end_key();
                 end_inc = inp_range.is_end_inclusive();
             } else {
                 end_inc = true;
             }
         } else {
-            /* it is the edge node. end key is the end of input range */
+            // it is the edge node. end key is the end of input range
             LOGMSG_ASSERT_EQ(has_valid_edge(), true, "node={}", to_string());
             end_key = inp_range.end_key();
             end_inc = inp_range.is_end_inclusive();
@@ -360,7 +360,7 @@ public:
         RELEASE_ASSERT_LE(subrange.start_key().compare(subrange.end_key()), 0, "[node={}]", to_string());
         RELEASE_ASSERT_LE(subrange.start_key().compare(inp_range.end_key()), 0, "[node={}]", to_string());
         return subrange;
-    }
+    } */
 
     K get_last_key() const {
         if (total_entries() == 0) { return K{}; }
@@ -421,7 +421,7 @@ public:
     bool any_upgrade_waiters() const { return (!m_trans_hdr.upgraders.testz()); }
 
     bool can_accomodate(const BtreeConfig& cfg, uint32_t key_size, uint32_t value_size) const {
-        return ((key_size + value_size + get_record_size()) <= get_available_size(cfg));
+        return ((key_size + value_size + get_record_size()) <= available_size(cfg));
     }
 
     template < typename V >
@@ -450,7 +450,7 @@ public:
     /*virtual uint32_t move_in_from_right_by_entries(const BtreeConfig& cfg, BtreeNode& other_node,
                                                    uint32_t nentries) = 0;
     virtual uint32_t move_in_from_right_by_size(const BtreeConfig& cfg, BtreeNode& other_node, uint32_t size) = 0;*/
-    virtual uint32_t get_available_size(const BtreeConfig& cfg) const = 0;
+    virtual uint32_t available_size(const BtreeConfig& cfg) const = 0;
     virtual std::string to_string(bool print_friendly = false) const = 0;
     virtual void get_nth_value(uint32_t ind, BtreeValue* out_val, bool copy) const = 0;
     virtual K get_nth_key(uint32_t ind, bool copykey) const = 0;
@@ -525,13 +525,13 @@ public:
 
 #ifndef NO_CHECKSUM
     void set_checksum(const BtreeConfig& cfg) {
-        get_persistent_header()->checksum = crc16_t10dif(init_crc_16, node_data_area_const(), node_area_size(cfg));
+        get_persistent_header()->checksum = crc16_t10dif(init_crc_16, node_data_area_const(), cfg.node_data_size());
     }
 
     bool verify_node(const BtreeConfig& cfg) const {
         HS_DEBUG_ASSERT_EQ(is_valid_node(), true, "verifying invalide node {}!",
                            get_persistent_header_const()->to_string());
-        auto exp_checksum = crc16_t10dif(init_crc_16, node_data_area_const(), node_area_size(cfg));
+        auto exp_checksum = crc16_t10dif(init_crc_16, node_data_area_const(), cfg.node_data_size());
         return ((get_magic() == BTREE_NODE_MAGIC) && (get_checksum() == exp_checksum));
     }
 #endif
@@ -557,27 +557,19 @@ public:
     void set_valid_node(bool valid) { get_persistent_header()->valid_node = (valid ? 1 : 0); }
     bool is_valid_node() const { return get_persistent_header_const()->valid_node; }
 
-    uint32_t get_occupied_size(const BtreeConfig& cfg) const { return (node_area_size(cfg) - get_available_size(cfg)); }
-    uint32_t get_suggested_min_size(const BtreeConfig& cfg) const { return cfg.max_key_size(); }
-
-    static uint32_t node_area_size(const BtreeConfig& cfg) { return cfg.node_size() - sizeof(persistent_hdr_t); }
-    static uint32_t ideal_fill_size(const BtreeConfig& cfg) {
-        return uint32_cast(node_area_size(cfg) * cfg.m_ideal_fill_pct) / 100;
-    }
-    static uint32_t merge_suggested_size(const BtreeConfig& cfg) { return node_area_size(cfg) - ideal_fill_size(cfg); }
-
+    uint32_t occupied_size(const BtreeConfig& cfg) const { return (cfg.node_data_size() - available_size(cfg)); }
     bool is_merge_needed(const BtreeConfig& cfg) const {
 #if 0
 #ifdef _PRERELEASE
-        if (homestore_flip->test_flip("btree_merge_node") && get_occupied_size(cfg) < node_area_size(cfg)) {
+        if (homestore_flip->test_flip("btree_merge_node") && occupied_size(cfg) < node_area_size(cfg)) {
             return true;
         }
 
         auto ret = homestore_flip->get_test_flip< uint64_t >("btree_merge_node_pct");
-        if (ret && get_occupied_size(cfg) < (ret.get() * node_area_size(cfg) / 100)) { return true; }
+        if (ret && occupied_size(cfg) < (ret.get() * node_area_size(cfg) / 100)) { return true; }
 #endif
 #endif
-        return (get_occupied_size(cfg) < get_suggested_min_size(cfg));
+        return (occupied_size(cfg) < cfg.suggested_min_size());
     }
 
     bnodeid_t next_bnode() const { return get_persistent_header_const()->next_node; }

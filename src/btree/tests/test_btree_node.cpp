@@ -140,10 +140,10 @@ struct NodeTest : public testing::Test {
         uint32_t start_ind{0};
         uint32_t end_ind{0};
         std::vector< std::pair< K, V > > out_vector;
-        auto ret = m_node1->get_all(BtreeKeyRangeSafe< K >{K{0u}, true, K{g_max_keys}, false}, g_max_keys, start_ind,
+        auto ret = m_node1->get_all(BtreeKeyRange< K >{K{0u}, true, K{g_max_keys}, false}, g_max_keys, start_ind,
                                     end_ind, &out_vector);
-        ret += m_node2->get_all(BtreeKeyRangeSafe< K >{K{0u}, true, K{g_max_keys}, false}, g_max_keys, start_ind,
-                                end_ind, &out_vector);
+        ret += m_node2->get_all(BtreeKeyRange< K >{K{0u}, true, K{g_max_keys}, false}, g_max_keys, start_ind, end_ind,
+                                &out_vector);
 
         ASSERT_EQ(ret, m_shadow_map.size()) << "Expected number of entries to be same with shadow_map size";
         ASSERT_EQ(out_vector.size(), m_shadow_map.size())
@@ -214,7 +214,7 @@ protected:
         LOGDEBUG("Node2:\n {}", m_node2->to_string(true));
     }
 
-    uint32_t remaining_space() const { return m_node1->get_available_size(m_cfg); }
+    uint32_t remaining_space() const { return m_node1->available_size(m_cfg); }
     bool has_room() const { return remaining_space() > (g_max_keysize + g_max_valsize + 32); }
 
 private:

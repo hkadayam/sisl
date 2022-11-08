@@ -191,41 +191,56 @@ ENUM(btree_status_t, uint32_t, success, not_found, retry, has_more, read_failed,
      merge_failed, replay_not_needed, fast_path_not_possible, resource_full, crc_mismatch, not_supported, node_freed)
 
 struct BtreeConfig {
-    uint64_t m_max_objs{0};
-    uint32_t m_max_key_size{0};
-    uint32_t m_max_value_size{0};
     uint32_t m_node_size;
-
+    uint32_t m_node_data_size;
     uint8_t m_ideal_fill_pct{90};
+    uint8_t m_suggested_min_pct{30};
     uint8_t m_split_pct{50};
-    uint32_t m_rebalance_max_nodes{3};
+    uint32_t m_max_merge_nodes{3};
     uint32_t m_rebalance_turned_on{false};
 
-    bool m_custom_kv{false}; // If Key/Value needs some transformation before read or write
     btree_node_type m_leaf_node_type{btree_node_type::VAR_OBJECT};
     btree_node_type m_int_node_type{btree_node_type::VAR_KEY};
     std::string m_btree_name; // Unique name for the btree
 
+private:
+    uint32_t m_suggested_min_size; // Precomputed values
+    uint32_t m_ideal_fill_size;
+
+public:
     BtreeConfig(uint32_t node_size, const std::string& btree_name = "") :
-            m_node_size{node_size}, m_btree_name{btree_name.empty() ? std::string("btree") : btree_name} {}
+            m_node_size{node_size},
+            m_node_data_size{node_size},
+            m_btree_name{btree_name.empty() ? std::string("btree") : btree_name} {
+        m_ideal_fill_size = (uint32_t)(m_node_data_size * m_ideal_fill_pct) / 100;
+        m_suggested_min_size = (uint32_t)(m_node_data_size * m_suggested_min_pct) / 100;
+    }
 
     virtual ~BtreeConfig() = default;
     uint32_t node_size() const { return m_node_size; };
-    uint32_t max_key_size() const { return m_max_key_size; }
-    void set_max_key_size(uint32_t max_key_size) { m_max_key_size = max_key_size; }
-
-    uint64_t max_objs() const { return m_max_objs; }
-    void set_max_objs(uint64_t max_objs) { m_max_objs = max_objs; }
-
-    uint32_t max_value_size() const { return m_max_value_size; }
-
-    void set_max_value_size(uint32_t max_value_size) { m_max_value_size = max_value_size; }
 
     uint32_t split_size(uint32_t filled_size) const { return uint32_cast(filled_size * m_split_pct) / 100; }
-    uint32_t ideal_fill_size() const { return (uint32_t)(m_node_size * m_ideal_fill_pct) / 100; }
-    const std::string& name() const { return m_btree_name; }
+    uint32_t ideal_fill_size() const { return m_ideal_fill_size; }
+    uint32_t suggested_min_size() const { return m_suggested_min_size; }
+    uint32_t node_data_size() const { return m_node_data_size; }
 
-    bool is_custom_kv() const { return m_custom_kv; }
+    void set_node_data_size(uint32_t data_size) {
+        m_node_data_size = data_size;
+        m_ideal_fill_size = (uint32_t)(m_node_data_size * m_ideal_fill_pct) / 100; // Recompute the values
+        m_suggested_min_size = (uint32_t)(m_node_data_size * m_suggested_min_pct) / 100;
+    }
+
+    void set_ideal_fill_pct(uint8_t pct) {
+        m_ideal_fill_pct = pct;
+        m_ideal_fill_size = (uint32_t)(m_node_data_size * m_ideal_fill_pct) / 100;
+    }
+
+    void set_suggested_min_size(uint8_t pct) {
+        m_suggested_min_pct = pct;
+        m_suggested_min_size = (uint32_t)(m_node_data_size * m_suggested_min_pct) / 100;
+    }
+
+    const std::string& name() const { return m_btree_name; }
     btree_node_type leaf_node_type() const { return m_leaf_node_type; }
     btree_node_type interior_node_type() const { return m_int_node_type; }
 };

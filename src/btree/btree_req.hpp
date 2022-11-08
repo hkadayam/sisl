@@ -17,6 +17,7 @@ struct BtreeRequest {
     void* m_op_context{nullptr};
 };
 
+#if 0
 // Base class for all range related operations
 struct BtreeRangeRequest : public BtreeRequest {
 public:
@@ -29,7 +30,7 @@ public:
                 (m_search_state.const_cursor()->m_locked_nodes == nullptr));
     }
 
-    BtreeSearchState& search_state() { return m_search_state; }
+    BtreeTraversalState& search_state() { return m_search_state; }
     BtreeQueryCursor* cursor() { return m_search_state.cursor(); }
     const BtreeQueryCursor* const_cursor() const { return m_search_state.const_cursor(); }
     BtreeKeyRange next_range() const { return m_search_state.next_range(); }
@@ -41,11 +42,51 @@ public:
     const BtreeKey& next_key() const { return m_search_state.next_key(); }
 
 protected:
-    BtreeRangeRequest(BtreeSearchState&& search_state, void* app_context = nullptr, uint32_t batch_size = UINT32_MAX) :
+    BtreeRangeRequest(BtreeTraversalState&& search_state, void* app_context = nullptr,
+                      uint32_t batch_size = UINT32_MAX) :
             BtreeRequest{app_context, nullptr}, m_search_state{std::move(search_state)}, m_batch_size{batch_size} {}
 
 private:
-    BtreeSearchState m_search_state;
+    BtreeTraversalState m_search_state;
+    uint32_t m_batch_size{1};
+};
+#endif
+
+// Base class for all range related operations
+template < typename K >
+struct BtreeRangeRequest : public BtreeRequest {
+public:
+    uint32_t batch_size() const { return m_batch_size; }
+    void set_batch_size(uint32_t count) { m_batch_size = count; }
+
+    bool is_empty_cursor() const {
+        return ((m_search_state.const_cursor()->m_last_key == nullptr) &&
+                (m_search_state.const_cursor()->m_locked_nodes == nullptr));
+    }
+
+    BtreeTraversalState< K >& search_state() { return m_search_state; }
+    BtreeQueryCursor< K >* cursor() { return m_search_state.cursor(); }
+    const BtreeQueryCursor< K >* const_cursor() const { return m_search_state.const_cursor(); }
+
+    const BtreeKeyRange< K >& input_range() const { return m_search_state.input_range(); }
+    const BtreeKeyRange< K >& next_range() { return m_search_state.next_range(); }
+    const BtreeKeyRange< K >& working_range() const { return m_search_state.working_range(); }
+
+    const K& next_key() const { return m_search_state.next_key(); }
+    void trim_working_range(K&& end_key, bool end_incl) {
+        m_search_state.trim_working_range(std::move(end_key), end_incl);
+    }
+    void set_cursor_key(const K& end_key) { return m_search_state.set_cursor_key(end_key); }
+
+protected:
+    BtreeRangeRequest(BtreeKeyRange< K >&& input_range, bool external_pagination = false, void* app_context = nullptr,
+                      uint32_t batch_size = UINT32_MAX) :
+            BtreeRequest{app_context, nullptr},
+            m_search_state{std::move(input_range), external_pagination},
+            m_batch_size{batch_size} {}
+
+private:
+    BtreeTraversalState< K > m_search_state;
     uint32_t m_batch_size{1};
 };
 
@@ -65,11 +106,12 @@ public:
     std::unique_ptr< BtreeValue > m_existing_val;
 };
 
-struct BtreeRangePutRequest : public BtreeRangeRequest {
+template < typename K >
+struct BtreeRangePutRequest : public BtreeRangeRequest< K > {
 public:
-    BtreeRangePutRequest(BtreeSearchState&& search_state, btree_put_type put_type, std::unique_ptr< BtreeValue > value,
+    BtreeRangePutRequest(BtreeKeyRange< K >&& inp_range, btree_put_type put_type, std::unique_ptr< BtreeValue > value,
                          void* app_context = nullptr, uint32_t batch_size = std::numeric_limits< uint32_t >::max()) :
-            BtreeRangeRequest(std::move(search_state), app_context, batch_size),
+            BtreeRangeRequest< K >(std::move(inp_range), false, app_context, batch_size),
             m_put_type{put_type},
             m_newval{std::move(value)} {}
 
@@ -104,25 +146,27 @@ public:
     std::unique_ptr< BtreeValue > m_outval;
 };
 
+template < typename K >
 struct BtreeRemoveAnyRequest : public BtreeRequest {
 public:
-    BtreeRemoveAnyRequest(BtreeKeyRange&& range, std::unique_ptr< BtreeKey > out_key,
+    BtreeRemoveAnyRequest(BtreeKeyRange< K >&& inp_range, std::unique_ptr< BtreeKey > out_key,
                           std::unique_ptr< BtreeValue > out_val) :
-            m_range{std::move(range)}, m_outkey{std::move(out_key)}, m_outval{std::move(out_val)} {}
+            m_range{std::move(inp_range)}, m_outkey{std::move(out_key)}, m_outval{std::move(out_val)} {}
 
-    BtreeKeyRange m_range;
+    BtreeKeyRange< K > m_range;
     std::unique_ptr< BtreeKey > m_outkey;
     std::unique_ptr< BtreeValue > m_outval;
 };
 
-struct BtreeRangeRemoveRequest : public BtreeRangeRequest {
+template < typename K >
+struct BtreeRangeRemoveRequest : public BtreeRangeRequest< K > {
 public:
-    BtreeRangeRemoveRequest(BtreeSearchState&& search_state, void* app_context = nullptr,
+    BtreeRangeRemoveRequest(BtreeKeyRange< K >&& inp_range, void* app_context = nullptr,
                             uint32_t batch_size = std::numeric_limits< uint32_t >::max()) :
-            BtreeRangeRequest(std::move(search_state), app_context, batch_size) {}
+            BtreeRangeRequest< K >(std::move(inp_range), false, app_context, batch_size) {}
 };
 
-using BtreeRemoveRequest = std::variant< BtreeSingleRemoveRequest, BtreeRemoveAnyRequest, BtreeRangeRemoveRequest >;
+/*using BtreeRemoveRequest = std::variant< BtreeSingleRemoveRequest, BtreeRemoveAnyRequest, BtreeRangeRemoveRequest >;
 
 static bool is_single_remove_request(BtreeRemoveRequest& req) {
     return (std::holds_alternative< BtreeSingleRemoveRequest >(req));
@@ -156,7 +200,7 @@ static void* remove_req_op_ctx(BtreeRemoveRequest& req) {
     } else {
         return to_single_remove_req(req).m_op_context;
     }
-}
+} */
 
 /////////////////////////// 3: Get Operations /////////////////////////////////////
 struct BtreeSingleGetRequest : public BtreeRequest {
@@ -171,20 +215,21 @@ public:
     std::unique_ptr< BtreeValue > m_outval;
 };
 
+template < typename K >
 struct BtreeGetAnyRequest : public BtreeRequest {
 public:
-    BtreeGetAnyRequest(BtreeKeyRange&& range, std::unique_ptr< BtreeKey > out_key,
+    BtreeGetAnyRequest(BtreeKeyRange< K >&& range, std::unique_ptr< BtreeKey > out_key,
                        std::unique_ptr< BtreeValue > out_val) :
             m_range{std::move(range)}, m_outkey{std::move(out_key)}, m_outval{std::move(out_val)} {}
 
-    BtreeKeyRange m_range;
+    BtreeKeyRange< K > m_range;
     std::unique_ptr< BtreeKey > m_outkey;
     std::unique_ptr< BtreeValue > m_outval;
 };
 
-using BtreeGetRequest = std::variant< BtreeSingleGetRequest, BtreeGetAnyRequest >;
+/*using BtreeGetRequest = std::variant< BtreeSingleGetRequest, BtreeGetAnyRequest >;
 
-/*static bool is_get_any_request(BtreeGetRequest& req) { return (std::holds_alternative< BtreeGetAnyRequest >(req)); }
+static bool is_get_any_request(BtreeGetRequest& req) { return (std::holds_alternative< BtreeGetAnyRequest >(req)); }
 
 static BtreeSingleGetRequest& to_single_get_req(BtreeGetRequest& req) { return std::get< BtreeSingleGetRequest >(req); }
 
@@ -216,21 +261,21 @@ ENUM(BtreeQueryType, uint8_t,
      // essentially create a serializable level of isolation.
      SERIALIZABLE_QUERY)
 
-struct BtreeQueryRequest : public BtreeRangeRequest {
+template < typename K >
+struct BtreeQueryRequest : public BtreeRangeRequest< K > {
 public:
-    /* TODO :- uint32_max to c++. pass reference */
-    BtreeQueryRequest(BtreeSearchState&& search_state,
+    BtreeQueryRequest(BtreeKeyRange< K >&& inp_range,
                       BtreeQueryType query_type = BtreeQueryType::SWEEP_NON_INTRUSIVE_PAGINATION_QUERY,
                       uint32_t batch_size = UINT32_MAX, void* app_context = nullptr) :
-            BtreeRangeRequest(std::move(search_state), app_context, batch_size), m_query_type{query_type} {}
+            BtreeRangeRequest< K >{std::move(inp_range), true, app_context, batch_size}, m_query_type{query_type} {}
     ~BtreeQueryRequest() = default;
 
     // virtual bool is_serializable() const = 0;
     BtreeQueryType query_type() const { return m_query_type; }
 
 protected:
-    const BtreeQueryType m_query_type;                           // Type of the query
-    const std::unique_ptr< BtreeQueryCursor > m_paginated_query; // Is it a paginated query
+    const BtreeQueryType m_query_type;                                // Type of the query
+    const std::unique_ptr< BtreeQueryCursor< K > > m_paginated_query; // Is it a paginated query
 };
 
 /* This class is a top level class to keep track of the locks that are held currently. It is
