@@ -425,39 +425,41 @@ private:
     bool is_end_inclusive() const { return m_input_range.is_end_inclusive(); }
 };
 
-class BtreeNodeInfo : public BtreeValue {
+class BtreeLinkInfo : public BtreeValue {
 private:
     bnodeid_t m_bnodeid{empty_bnodeid};
+    uint64_t m_link_version{0}; // Link version between parent and a child
 
 public:
-    BtreeNodeInfo() = default;
-    explicit BtreeNodeInfo(const bnodeid_t& id) : m_bnodeid(id) {}
-    BtreeNodeInfo& operator=(const BtreeNodeInfo& other) = default;
+    BtreeLinkInfo() = default;
+    explicit BtreeLinkInfo(bnodeid_t id, uint64_t v) : m_bnodeid(id), m_link_version{v} {}
+    BtreeLinkInfo& operator=(const BtreeLinkInfo& other) = default;
 
     bnodeid_t bnode_id() const { return m_bnodeid; }
+    uint64_t link_version() const { return m_link_version; }
     void set_bnode_id(bnodeid_t bid) { m_bnodeid = bid; }
+    void set_link_version(uint64_t v) { m_link_version = v; }
     bool has_valid_bnode_id() const { return (m_bnodeid != empty_bnodeid); }
 
     sisl::blob serialize() const override {
         sisl::blob b;
-        b.size = sizeof(bnodeid_t);
-        b.bytes = uintptr_cast(const_cast< bnodeid_t* >(&m_bnodeid));
+        b.size = sizeof(BtreeLinkInfo);
+        b.bytes = uintptr_cast(const_cast< BtreeLinkInfo* >(this));
         return b;
     }
-    uint32_t serialized_size() const override { return sizeof(bnodeid_t); }
-    static uint32_t get_fixed_size() { return sizeof(bnodeid_t); }
-    std::string to_string() const override { return fmt::format("{}", m_bnodeid); }
-    bool operator==(const BtreeNodeInfo& other) const { return (m_bnodeid == other.m_bnodeid); }
+    uint32_t serialized_size() const override { return sizeof(BtreeLinkInfo); }
+    static uint32_t get_fixed_size() { return sizeof(BtreeLinkInfo); }
+    std::string to_string() const override { return fmt::format("{}.{}", m_bnodeid, m_link_version); }
+    bool operator==(const BtreeLinkInfo& other) const = default;
 
     void deserialize(const blob& b, bool copy) override {
-        DEBUG_ASSERT_EQ(b.size, sizeof(bnodeid_t), "BtreeNodeInfo deserialize received invalid blob");
-        m_bnodeid = *(r_cast< bnodeid_t* >(b.bytes));
+        DEBUG_ASSERT_EQ(b.size, sizeof(BtreeLinkInfo), "BtreeLinkInfo deserialize received invalid blob");
+        BtreeLinkInfo* other = r_cast< BtreeLinkInfo* >(b.bytes);
+        m_bnodeid = other->m_bnodeid;
+        m_link_version = other->m_link_version;
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const BtreeNodeInfo& b) {
-        os << b.m_bnodeid;
-        return os;
-    }
+    friend std::ostream& operator<<(std::ostream& os, const BtreeLinkInfo& b) { os << b.to_string() return os; }
 };
 
 } // namespace btree

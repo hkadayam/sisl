@@ -15,8 +15,8 @@ btree_status_t Btree< K, V >::post_order_traversal(locktype_t ltype, const auto&
     }
 
     btree_status_t ret{btree_status_t::success};
-    if (m_root_node_id != empty_bnodeid) {
-        read_and_lock_node(m_root_node_id, root, ltype, ltype, nullptr);
+    if (m_root_node_info->node_id() != empty_bnodeid) {
+        read_and_lock_node(m_root_node_info->node_id(), root, ltype, ltype, nullptr);
         if (ret != btree_status_t::success) { goto done; }
 
         ret = post_order_traversal(root, ltype, cb);
@@ -38,11 +38,11 @@ btree_status_t Btree< K, V >::post_order_traversal(const BtreeNodePtr< K >& node
     btree_status_t ret = btree_status_t::success;
 
     if (!node->is_leaf()) {
-        BtreeNodeInfo child_info;
+        BtreeLinkInfo child_info;
         while (i <= node->total_entries()) {
             if (i == node->total_entries()) {
                 if (!node->has_valid_edge()) { break; }
-                child_info.set_bnode_id(node->get_edge_id());
+                child_info.set_bnode_id(node->edge_id());
             } else {
                 node->get_nth_value(i, &child_info, false /* copy */);
             }
@@ -83,7 +83,7 @@ template < typename K, typename V >
 uint64_t Btree< K, V >::get_btree_node_cnt() const {
     uint64_t cnt = 1; /* increment it for root */
     m_btree_lock.lock_shared();
-    cnt += get_child_node_cnt(m_root_node_id);
+    cnt += get_child_node_cnt(m_root_node_info->node_id());
     m_btree_lock.unlock_shared();
     return cnt;
 }
@@ -98,11 +98,11 @@ uint64_t Btree< K, V >::get_child_node_cnt(bnodeid_t bnodeid) const {
     if (!node->is_leaf()) {
         uint32_t i = 0;
         while (i < node->total_entries()) {
-            BtreeNodeInfo p = node->get(i, false);
+            BtreeLinkInfo p = node->get(i, false);
             cnt += get_child_node_cnt(p.bnode_id()) + 1;
             ++i;
         }
-        if (node->has_valid_edge()) { cnt += get_child_node_cnt(node->get_edge_id()) + 1; }
+        if (node->has_valid_edge()) { cnt += get_child_node_cnt(node->edge_id()) + 1; }
     }
     unlock_node(node, acq_lock);
     return cnt;
@@ -120,12 +120,12 @@ void Btree< K, V >::to_string(bnodeid_t bnodeid, std::string& buf) const {
     if (!node->is_leaf()) {
         uint32_t i = 0;
         while (i < node->total_entries()) {
-            BtreeNodeInfo p;
+            BtreeLinkInfo p;
             node->get_nth_value(i, &p, false);
             to_string(p.bnode_id(), buf);
             ++i;
         }
-        if (node->has_valid_edge()) { to_string(node->get_edge_id(), buf); }
+        if (node->has_valid_edge()) { to_string(node->edge_id(), buf); }
     }
     unlock_node(node, acq_lock);
 }
@@ -135,13 +135,13 @@ void Btree< K, V >::to_string(bnodeid_t bnodeid, std::string& buf) const {
                     BtreeNodePtr< K > parent_node = (jentry->is_root) ? read_node(m_root_node_id) : read_node(jentry->parent_node.node_id);
 
                     // Parent already went ahead of the journal entry, return done
-                    if (parent_node->get_gen() >= jentry->parent_node.node_gen) { return btree_status_t::replay_not_needed; }
+                    if (parent_node->node_gen() >= jentry->parent_node.node_gen) { return btree_status_t::replay_not_needed; }
                 }
 #endif
 
 template < typename K, typename V >
 void Btree< K, V >::validate_sanity_child(const BtreeNodePtr< K >& parent_node, uint32_t ind) const {
-    BtreeNodeInfo child_info;
+    BtreeLinkInfo child_info;
     K child_first_key;
     K child_last_key;
     K parent_key;
@@ -183,7 +183,7 @@ void Btree< K, V >::validate_sanity_child(const BtreeNodePtr< K >& parent_node, 
 
 template < typename K, typename V >
 void Btree< K, V >::validate_sanity_next_child(const BtreeNodePtr< K >& parent_node, uint32_t ind) const {
-    BtreeNodeInfo child_info;
+    BtreeLinkInfo child_info;
     K child_key;
     K parent_key;
 

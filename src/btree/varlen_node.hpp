@@ -185,6 +185,18 @@ public:
         this->inc_gen();
     }
 
+    void remove_all(const BtreeConfig& cfg) override {
+        this->sub_entries(this->total_entries());
+        this->invalidate_edge();
+        this->inc_gen();
+        get_var_node_header()->m_init_available_space = cfg.node_data_size();
+        get_var_node_header()->m_tail_arena_offset = cfg.node_data_size();
+        get_var_node_header()->m_available_space = get_var_node_header()->m_tail_arena_offset - sizeof(var_node_header);
+#ifndef NDEBUG
+        validate_sanity();
+#endif
+    }
+
     /*V get(uint32_t ind, bool copy) const {
         // Need edge index
         if (ind == this->total_entries()) {
@@ -198,8 +210,8 @@ public:
 
     uint32_t move_out_to_right_by_entries(const BtreeConfig& cfg, BtreeNode< K >& o, uint32_t nentries) override {
         auto& other = static_cast< VariableNode& >(o);
-        const auto this_gen = this->get_gen();
-        const auto other_gen = other.get_gen();
+        const auto this_gen = this->node_gen();
+        const auto other_gen = other.node_gen();
 
         const auto this_nentries = this->total_entries();
         nentries = std::min(nentries, this_nentries);
@@ -230,7 +242,7 @@ public:
 
         if (!this->is_leaf() && (other.total_entries() != 0)) {
             // Incase this node is an edge node, move the stick to the right hand side node
-            other.set_edge_id(this->get_edge_id());
+            other.set_edge_id(this->edge_id());
             this->invalidate_edge();
         }
         remove(full_move ? 0u : ind + 1, start_ind); // Remove all entries in bulk
@@ -247,8 +259,8 @@ public:
     uint32_t move_out_to_right_by_size(const BtreeConfig& cfg, BtreeNode< K >& o, uint32_t size_to_move) override {
         auto& other = static_cast< VariableNode& >(o);
         uint32_t moved_size = 0U;
-        auto this_gen = this->get_gen();
-        auto other_gen = other.get_gen();
+        auto this_gen = this->node_gen();
+        auto other_gen = other.node_gen();
 
         uint32_t ind = this->total_entries() - 1;
         while (ind > 0) {
@@ -274,7 +286,7 @@ public:
 
         if (!this->is_leaf() && (other.total_entries() != 0)) {
             // Incase this node is an edge node, move the stick to the right hand side node
-            other.set_edge_id(this->get_edge_id());
+            other.set_edge_id(this->edge_id());
             this->invalidate_edge();
         }
 
@@ -304,7 +316,7 @@ public:
     uint32_t copy_by_size(const BtreeConfig& cfg, const BtreeNode< K >& o, uint32_t start_idx,
                           uint32_t copy_size) override {
         auto& other = static_cast< const VariableNode& >(o);
-        auto this_gen = this->get_gen();
+        auto this_gen = this->node_gen();
 
         auto idx = start_idx;
         uint32_t n = 0;
@@ -324,7 +336,7 @@ public:
 
         // If we copied everything from start_idx till end and if its an edge node, need to copy the edge id as well.
         if (other.has_valid_edge() && ((start_idx + n) == other.total_entries())) {
-            this->set_edge_id(other.get_edge_id());
+            this->set_edge_id(other.edge_id());
         }
         return n;
     }
@@ -332,7 +344,7 @@ public:
     uint32_t copy_by_entries(const BtreeConfig& cfg, const BtreeNode< K >& o, uint32_t start_idx,
                              uint32_t nentries) override {
         auto& other = static_cast< const VariableNode& >(o);
-        auto this_gen = this->get_gen();
+        auto this_gen = this->node_gen();
 
         auto idx = start_idx;
         uint32_t n = 0;
@@ -349,15 +361,15 @@ public:
 
         // If we copied everything from start_idx till end and if its an edge node, need to copy the edge id as well.
         if (other.has_valid_edge() && ((start_idx + n) == other.total_entries())) {
-            this->set_edge_id(other.get_edge_id());
+            this->set_edge_id(other.edge_id());
         }
         return n;
     }
 
     /*uint32_t move_in_from_right_by_entries(const BtreeConfig& cfg, BtreeNode< K >& o, uint32_t nentries) override {
         auto& other = static_cast< VariableNode& >(o);
-        auto this_gen = this->get_gen();
-        auto other_gen = other.get_gen();
+        auto this_gen = this->node_gen();
+        auto other_gen = other.node_gen();
         nentries = std::min(nentries, other.total_entries());
 
         if (nentries == 0) { return 0; }
@@ -384,7 +396,7 @@ public:
         if (!other.is_leaf() && (other.total_entries() == 0)) {
             // Incase other node is an edge node and we moved all the data into this node, move over the edge info as
             // well.
-            this->set_edge_id(other.get_edge_id());
+            this->set_edge_id(other.edge_id());
             other.invalidate_edge();
         }
 
@@ -400,8 +412,8 @@ public:
     uint32_t move_in_from_right_by_size(const BtreeConfig& cfg, BtreeNode< K >& o, uint32_t size_to_move) override {
         auto& other = static_cast< VariableNode& >(o);
         uint32_t moved_size = 0U;
-        auto this_gen = this->get_gen();
-        auto other_gen = other.get_gen();
+        auto this_gen = this->node_gen();
+        auto other_gen = other.node_gen();
 
         uint32_t ind = 0;
         while (ind < this->total_entries()) {
@@ -428,7 +440,7 @@ public:
         if (!other.is_leaf() && (other.total_entries() == 0)) {
             // Incase other node is an edge node and we moved all the data into this node, move over the edge info as
             // well.
-            this->set_edge_id(other.get_edge_id());
+            this->set_edge_id(other.edge_id());
             other.invalidate_edge();
         }
 
@@ -473,7 +485,7 @@ public:
         if (ind == this->total_entries()) {
             DEBUG_ASSERT_EQ(this->is_leaf(), false, "get_nth_value out-of-bound");
             DEBUG_ASSERT_EQ(this->has_valid_edge(), true, "get_nth_value out-of-bound");
-            *(BtreeNodeInfo*)out_val = this->get_edge_value();
+            *(BtreeLinkInfo*)out_val = this->get_edge_value();
         } else {
             sisl::blob b{const_cast< uint8_t* >(get_nth_obj(ind)) + get_nth_key_len(ind), get_nth_value_len(ind)};
             out_val->deserialize(b, copy);
@@ -490,10 +502,10 @@ public:
         auto str = fmt::format(
             "{}id={} nEntries={} {} free_space={} ",
             (print_friendly ? "---------------------------------------------------------------------\n" : ""),
-            this->get_node_id(), this->total_entries(), (this->is_leaf() ? "LEAF" : "INTERIOR"),
+            this->node_id(), this->total_entries(), (this->is_leaf() ? "LEAF" : "INTERIOR"),
             get_var_node_header_const()->m_available_space);
         if (!this->is_leaf() && (this->has_valid_edge())) {
-            fmt::format_to(std::back_inserter(str), "edge_id={} ", this->get_edge_id());
+            fmt::format_to(std::back_inserter(str), "edge_id={} ", this->edge_id());
         }
         for (uint32_t i{0}; i < this->total_entries(); ++i) {
             V val;

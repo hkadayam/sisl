@@ -22,15 +22,15 @@ BtreeNode::BtreeNode(uint8_t* node_buf, bnodeid_t id, bool init) : m_phys_node_b
         set_edge_id(empty_bnodeid);
         set_node_id(id);
     } else {
-        DEBUG_ASSERT_EQ(get_node_id(), id);
-        DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
-        DEBUG_ASSERT_EQ(get_version(), BTREE_NODE_VERSION);
+        DEBUG_ASSERT_EQ(node_id(), id);
+        DEBUG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC);
+        DEBUG_ASSERT_EQ(version(), BTREE_NODE_VERSION);
     }
 }
 
 node_find_result_t BtreeNode::find(const BtreeSearchRange& range, BtreeKey* outkey, BtreeValue* outval, bool copy_key,
                                    bool copy_val) const {
-    LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}", m_pers_header.to_string());
+    LOGMSG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}", m_pers_header.to_string());
 
     auto result = bsearch_node(range);
     if (result.end_of_search_index == (int)total_entries() && !has_valid_edge()) {
@@ -57,7 +57,7 @@ node_find_result_t BtreeNode::find(const BtreeKey& find_key, BtreeValue* outval,
 
 uint32_t BtreeNode::get_all(const BtreeSearchRange& range, uint32_t max_count, int& start_ind, int& end_ind,
                             std::vector< std::pair< K, V > >* out_values = nullptr) const {
-    LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}", m_pers_header.to_string());
+    LOGMSG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}", m_pers_header.to_string());
     auto count = 0U;
 
     // Get the start index of the search range.
@@ -139,7 +139,7 @@ uint32_t BtreeNode::get_all(const BtreeSearchRange& range, uint32_t max_count, i
 }
 
 bool BtreeNode::put(const BtreeKey& key, const BtreeValue& val, btree_put_type put_type, BtreeValue& existing_val) {
-    LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}", m_pers_header.to_string());
+    LOGMSG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}", m_pers_header.to_string());
     auto result = find(key, nullptr, nullptr);
     bool ret = true;
 
@@ -173,9 +173,9 @@ void BtreeNode::set_checksum(size_t size) {
 
 bool BtreeNode::verify_node(size_t size, verify_result& vr) const {
     HS_DEBUG_ASSERT_EQ(is_valid_node(), true, "verifying invalide node {}!", m_pers_header.to_string());
-    vr.act_magic = get_magic();
+    vr.act_magic = magic();
     vr.exp_magic = BTREE_NODE_MAGIC;
-    vr.act_checksum = get_checksum();
+    vr.act_checksum = checksum();
     vr.exp_checksum = crc16_t10dif(init_crc_16, m_node_area, size);
     return (vr.act_magic == vr.exp_magic && vr.act_checksum == vr.exp_checksum) ? true : false;
 }
@@ -206,7 +206,7 @@ btree_status_t BtreeNode::insert(const BtreeKey& key, const BtreeValue& val) {
     auto result = find(key, nullptr, nullptr);
     assert(!is_leaf() || (!result.found)); // We do not support duplicate keys yet
     auto ret = insert(result.end_of_search_index, key, val);
-    DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
+    DEBUG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC);
     return ret;
 }
 
@@ -215,7 +215,7 @@ bool BtreeNode::remove_one(const BtreeSearchRange& range, BtreeKey* outkey, Btre
     if (!result.found) { return false; }
 
     remove(result.end_of_search_index);
-    LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "{}", m_pers_header.to_string());
+    LOGMSG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC, "{}", m_pers_header.to_string());
     return true;
 }
 
@@ -225,25 +225,25 @@ void BtreeNode::append(uint32_t index, const BtreeKey& key, const BtreeValue& va
     get_nth_value(index, &nth_val, false);
     nth_val.append_blob(val, existing_val);
     to_variant_node()->update(index, key, nth_val);
-    LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "{}", m_pers_header.to_string());
+    LOGMSG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC, "{}", m_pers_header.to_string());
 }
 
 void BtreeNode::update(const BtreeKey& key, const BtreeValue& val, BtreeKey* outkey, BtreeValue* outval) {
     auto result = find(key, outkey, outval);
     assert(result.found);
     update(result.end_of_search_index, val);
-    LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "{}", m_pers_header.to_string());
+    LOGMSG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC, "{}", m_pers_header.to_string());
 }
 
 void BtreeNode::set_edge_value(const BtreeValue& v) {
-    BtreeNodeInfo* bni = (BtreeNodeInfo*)&v;
+    BtreeLinkInfo* bni = (BtreeLinkInfo*)&v;
     set_edge_id(bni->bnode_id());
-    DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
+    DEBUG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC);
 }
 
 void BtreeNode::get_edge_value(BtreeValue* v) const {
     if (is_leaf()) { return; }
-    v->set_blob(BtreeNodeInfo(get_edge_id()).get_blob());
+    v->set_blob(BtreeLinkInfo(edge_id()).get_blob());
 }
 
 void BtreeNode::get_adjacent_indicies(uint32_t cur_ind, vector< int >& indices_list, uint32_t max_indices) const {
@@ -272,7 +272,7 @@ void BtreeNode::get_adjacent_indicies(uint32_t cur_ind, vector< int >& indices_l
 }
 
 node_find_result_t BtreeNode::bsearch_node(const BtreeSearchRange& range) const {
-    DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
+    DEBUG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC);
     const auto ret = bsearch(-1, total_entries(), range);
     const auto selection = range.multi_option();
 
