@@ -78,7 +78,7 @@ public:
             DEBUG_ASSERT((!this->is_leaf() && this->has_valid_edge()), "node={}", to_string());
             // Set the last key/value as edge entry and by decrementing entry count automatically removed the last
             // entry.
-            BtreeNodeInfo new_edge;
+            BtreeLinkInfo new_edge;
             get_nth_value(ind_s - 1, &new_edge, false);
             this->set_nth_value(total_entries, new_edge);
             this->sub_entries(total_entries - ind_s + 1);
@@ -88,6 +88,15 @@ public:
             if (sz != 0) { std::memmove(get_nth_obj(ind_s), get_nth_obj(ind_e + 1), sz); }
             this->sub_entries(ind_e - ind_s + 1);
         }
+        this->inc_gen();
+#ifndef NDEBUG
+        validate_sanity();
+#endif
+    }
+
+    void remove_all(const BtreeConfig& cfg) override {
+        this->sub_entries(this->total_entries());
+        this->invalidate_edge();
         this->inc_gen();
 #ifndef NDEBUG
         validate_sanity();
@@ -116,7 +125,7 @@ public:
 
         // If there is an edgeEntry in this node, it needs to move to move out as well.
         if (!this->is_leaf() && this->has_valid_edge()) {
-            other_node.set_edge_id(this->get_edge_id());
+            other_node.set_edge_id(this->edge_id());
             this->invalidate_edge();
         }
 
@@ -156,7 +165,7 @@ public:
 
         // If we copied everything from start_idx till end and if its an edge node, need to copy the edge id as well.
         if (other.has_valid_edge() && ((start_idx + nentries) == other.total_entries())) {
-            this->set_edge_id(other.get_edge_id());
+            this->set_edge_id(other.edge_id());
         }
         return nentries;
     }
@@ -180,7 +189,7 @@ public:
         // we need to move that to us, so that if need be next node could be freed.
         if ((other_node.total_entries() == 0) && other_node.has_valid_edge()) {
             DEBUG_ASSERT_EQ(this->has_valid_edge(), false, "node={}", to_string());
-            this->set_edge_id(other_node.get_edge_id());
+            this->set_edge_id(other_node.edge_id());
             other_node.invalidate_edge();
         }
 
@@ -213,7 +222,7 @@ public:
         if (ind == this->total_entries()) {
             DEBUG_ASSERT_EQ(this->is_leaf(), false, "setting value outside bounds on leaf node");
             DEBUG_ASSERT_EQ(this->has_valid_edge(), true, "node={}", to_string());
-            *(BtreeNodeInfo*)out_val = this->get_edge_value();
+            *(BtreeLinkInfo*)out_val = this->get_edge_value();
         } else {
             sisl::blob b;
             b.bytes = const_cast< uint8_t* >(reinterpret_cast< const uint8_t* >(
@@ -232,9 +241,9 @@ public:
     std::string to_string(bool print_friendly = false) const override {
         auto str = fmt::format("{}id={} nEntries={} {} ",
                                (print_friendly ? "------------------------------------------------------------\n" : ""),
-                               this->get_node_id(), this->total_entries(), (this->is_leaf() ? "LEAF" : "INTERIOR"));
+                               this->node_id(), this->total_entries(), (this->is_leaf() ? "LEAF" : "INTERIOR"));
         if (!this->is_leaf() && (this->has_valid_edge())) {
-            fmt::format_to(std::back_inserter(str), "edge_id={} ", this->get_edge_id());
+            fmt::format_to(std::back_inserter(str), "edge_id={} ", this->edge_id());
         }
 
         for (uint32_t i{0}; i < this->total_entries(); ++i) {

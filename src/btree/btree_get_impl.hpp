@@ -23,7 +23,7 @@ btree_status_t Btree< K, V >::do_get(const BtreeNodePtr< K >& my_node, ReqT& gre
         return ret;
     }
 
-    BtreeNodeInfo child_info;
+    BtreeLinkInfo child_info;
     if constexpr (std::is_same_v< BtreeGetAnyRequest< K >, ReqT >) {
         std::tie(found, idx) = my_node->find(greq.m_range.start_key(), &child_info, true);
     } else if constexpr (std::is_same_v< BtreeSingleGetRequest, ReqT >) {

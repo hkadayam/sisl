@@ -33,6 +33,9 @@ public:
 template < typename K >
 using BtreeNodePtr = boost::intrusive_ptr< sisl::btree::BtreeNode< K > >;
 
+template < typename K >
+using write_node_info_t = std::pair< BtreeNodePtr< K >&, btree_node_write_type >;
+
 template < typename K, typename V >
 struct BtreeThreadVariables {
     std::vector< btree_locked_node_info< K, V > > wr_locked_nodes;
@@ -44,7 +47,7 @@ template < typename K, typename V >
 class Btree {
 private:
     mutable folly::SharedMutexWritePriority m_btree_lock;
-    bnodeid_t m_root_node_id{empty_bnodeid};
+    BtreeLinkInfo m_root_node_info;
 
     BtreeMetrics m_metrics;
     std::atomic< bool > m_destroyed{false};
@@ -108,21 +111,19 @@ protected:
     virtual BtreeNodePtr< K > alloc_node(bool is_leaf) = 0;
     virtual BtreeNode< K >* init_node(uint8_t* node_buf, bnodeid_t id, bool init_buf, bool is_leaf);
     virtual btree_status_t read_node_impl(bnodeid_t id, BtreeNodePtr< K >& bnode) const = 0;
-    virtual btree_status_t write_node_impl(const BtreeNodePtr< K >& bn, const BtreeNodePtr< K >& dependent_bn,
-                                           void* context) = 0;
-    virtual void swap_node(const BtreeNodePtr< K >& node1, const BtreeNodePtr< K >& node2, void* context) = 0;
+    virtual btree_status_t write_node_impl(folly::small_vector< write_node_info_t, 5 >&& nodes, void* context) = 0;
     virtual btree_status_t refresh_node(const BtreeNodePtr< K >& bn, bool is_write_modifiable, void* context) const = 0;
     virtual void free_node_impl(const BtreeNodePtr< K >& node, void* context) = 0;
 
-    virtual void create_tree_precommit(const BtreeNodePtr< K >& root_node, void* op_context) = 0;
-    virtual void split_node_precommit(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node1,
-                                      const BtreeNodePtr< K >& child_node2, bool root_split, bool edge_split,
-                                      void* op_context) = 0;
-    virtual void merge_node_precommit(bool is_root_merge, const BtreeNodePtr< K >& parent_node,
-                                      uint32_t parent_merge_start_idx, const BtreeNodePtr< K >& child_node1,
-                                      const std::vector< BtreeNodePtr< K > >* old_child_nodes,
-                                      const std::vector< BtreeNodePtr< K > >* replace_child_nodes,
-                                      void* op_context) = 0;
+    /*virtual void create_tree_precommit(const BtreeNodePtr< K >& root_node, void* op_context) = 0;
+     virtual void split_node_precommit(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node1,
+                                       const BtreeNodePtr< K >& child_node2, bool root_split, bool edge_split,
+                                       void* op_context) = 0;
+     virtual void merge_node_precommit(bool is_root_merge, const BtreeNodePtr< K >& parent_node,
+                                       uint32_t parent_merge_start_idx, const BtreeNodePtr< K >& child_node1,
+                                       const std::vector< BtreeNodePtr< K > >* old_child_nodes,
+                                       const std::vector< BtreeNodePtr< K > >* replace_child_nodes,
+                                       void* op_context) = 0; */
     virtual std::string btree_store_type() const = 0;
 
     /////////////////////////// Methods the application use case is expected to handle ///////////////////////////
@@ -135,12 +136,13 @@ private:
     btree_status_t read_and_lock_node(bnodeid_t id, BtreeNodePtr< K >& node_ptr, locktype_t int_lock_type,
                                       locktype_t leaf_lock_type, void* context) const;
     void read_node_or_fail(bnodeid_t id, BtreeNodePtr< K >& node) const;
-    btree_status_t write_node(const BtreeNodePtr< K >& node, const BtreeNodePtr< K >& dependent_bn, void* context);
+    btree_status_t write_node(const BtreeNodePtr< K >& node, void* context);
+    btree_status_t write_nodes(folly::small_vector< write_node_info_t, 5 >&& nodes, void* context);
     void free_node(const BtreeNodePtr< K >& node, locktype_t cur_lock, void* context);
     BtreeNodePtr< K > alloc_leaf_node();
     BtreeNodePtr< K > alloc_interior_node();
 
-    btree_status_t get_child_and_lock_node(const BtreeNodePtr< K >& node, uint32_t index, BtreeNodeInfo& child_info,
+    btree_status_t get_child_and_lock_node(const BtreeNodePtr< K >& node, uint32_t index, BtreeLinkInfo& child_info,
                                            BtreeNodePtr< K >& child_node, locktype_t int_lock_type,
                                            locktype_t leaf_lock_type, void* context) const;
     btree_status_t upgrade_node_locks(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node,

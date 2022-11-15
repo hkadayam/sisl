@@ -114,7 +114,7 @@ class HSBtree : public Btree< K, V > {
             K key;
             my_node->get_nth_key(i, &key, false);
             if (!my_node->is_leaf()) {
-                BtreeNodeInfo child;
+                BtreeLinkInfo child;
                 my_node->get(i, &child, false);
                 success = verify_node(child.bnode_id(), my_node, i, update_debug_bm);
                 if (!success) { goto exit_on_error; }
@@ -194,7 +194,7 @@ class HSBtree : public Btree< K, V > {
         }
 
         if (my_node->has_valid_edge()) {
-            success = verify_node(my_node->get_edge_id(), my_node, my_node->total_entries(), update_debug_bm);
+            success = verify_node(my_node->edge_id(), my_node, my_node->total_entries(), update_debug_bm);
             if (!success) { goto exit_on_error; }
         }
 
@@ -225,9 +225,9 @@ class HSBtree : public Btree< K, V > {
         read_node_or_fail(id, parent_node);
 
         // Parent already went ahead of the journal entry, return done
-        if (parent_node->get_gen() >= jentry->parent_node.node_gen) {
+        if (parent_node->node_gen() >= jentry->parent_node.node_gen) {
             BT_LOG(INFO, base, , "Journal replay: parent_node gen {} ahead of jentry gen {} is root {} , skipping ",
-                   parent_node->get_gen(), jentry->parent_node.get_gen(), jentry->is_root);
+                   parent_node->node_gen(), jentry->parent_node.node_gen(), jentry->is_root);
             return btree_status_t::replay_not_needed;
         }
 
@@ -244,7 +244,7 @@ class HSBtree : public Btree< K, V > {
             BT_LOG(INFO, btree_generics, ,
                    "Journal replay: root split, so creating child_node id={} and swapping the node with "
                    "parent_node id={} names {}",
-                   child_node1->get_node_id(), parent_node->get_node_id(), m_cfg.name());
+                   child_node1->node_id(), parent_node->node_id(), m_cfg.name());
 
         } else {
             read_node_or_fail(j_child_nodes[0]->node_id(), child_node1);
@@ -252,8 +252,8 @@ class HSBtree : public Btree< K, V > {
 
         THIS_BT_LOG(INFO, btree_generics, ,
                     "Journal replay: child_node1 => jentry: [id={} gen={}], ondisk: [id={} gen={}] names {}",
-                    j_child_nodes[0]->node_id(), j_child_nodes[0]->node_gen(), child_node1->get_node_id(),
-                    child_node1->get_gen(), m_cfg.name());
+                    j_child_nodes[0]->node_id(), j_child_nodes[0]->node_gen(), child_node1->node_id(),
+                    child_node1->node_gen(), m_cfg.name());
         if (jentry->is_root) {
             BT_RELEASE_ASSERT_CMP(j_child_nodes[0]->type, ==, bt_journal_node_op::creation, ,
                                   "Expected first node in journal entry to be new creation for root split");
@@ -278,12 +278,12 @@ class HSBtree : public Btree< K, V > {
 
         BtreeNodePtr< K > child_node2;
         // Check if child1 is ahead of the generation
-        if (child_node1->get_gen() >= j_child_nodes[0]->node_gen()) {
+        if (child_node1->node_gen() >= j_child_nodes[0]->node_gen()) {
             // leftmost_node is written, so right node must have been written as well.
             read_node_or_fail(child_node1->next_bnode(), child_node2);
 
             // sanity check for right node
-            BT_RELEASE_ASSERT_CMP(child_node2->get_gen(), >=, j_child_nodes[1]->node_gen(), child_node2,
+            BT_RELEASE_ASSERT_CMP(child_node2->node_gen(), >=, j_child_nodes[1]->node_gen(), child_node2,
                                   "gen cnt should be more than the journal entry");
             // no need to recover child nodes
             return false;
@@ -338,7 +338,7 @@ class HSBtree : public Btree< K, V > {
         child_node2->set_next_bnode(child_node1->next_bnode());
         child_node2->set_gen(j_child_nodes[1]->node_gen());
 
-        child_node1->set_next_bnode(child_node2->get_node_id());
+        child_node1->set_next_bnode(child_node2->node_id());
         child_node1->set_gen(j_child_nodes[0]->node_gen());
 
         THIS_BT_LOG(INFO, btree_generics, , "Journal replay: child_node2 {}", child_node2->to_string());
@@ -373,7 +373,7 @@ class HSBtree : public Btree< K, V > {
         auto child2_node_id = j_child_nodes[1]->node_id();
 
         // update child2_key value
-        BtreeNodeInfo ninfo;
+        BtreeLinkInfo ninfo;
         ninfo.set_bnode_id(child2_node_id);
         parent_node->update(split_indx, ninfo);
 

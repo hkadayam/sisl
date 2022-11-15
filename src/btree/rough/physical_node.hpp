@@ -83,9 +83,9 @@ public:
             set_edge_id(empty_bnodeid);
             set_node_id(*id);
         } else {
-            DEBUG_ASSERT_EQ(get_node_id(), *id);
-            DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
-            DEBUG_ASSERT_EQ(get_version(), BTREE_NODE_VERSION);
+            DEBUG_ASSERT_EQ(node_id(), *id);
+            DEBUG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC);
+            DEBUG_ASSERT_EQ(version(), BTREE_NODE_VERSION);
         }
     }
     PhysicalNode(bnodeid_t id, bool init) {
@@ -100,32 +100,32 @@ public:
             set_edge_id(empty_bnodeid);
             set_node_id(id);
         } else {
-            DEBUG_ASSERT_EQ(get_node_id(), id);
-            DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
-            DEBUG_ASSERT_EQ(get_version(), BTREE_NODE_VERSION);
+            DEBUG_ASSERT_EQ(node_id(), id);
+            DEBUG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC);
+            DEBUG_ASSERT_EQ(version(), BTREE_NODE_VERSION);
         }
     }
     ~PhysicalNode() = default;
 
     persistent_hdr_t* get_persistent_header() { return &m_pers_header; }
 
-    uint8_t get_magic() const { return m_pers_header.magic; }
+    uint8_t magic() const { return m_pers_header.magic; }
     void set_magic() { m_pers_header.magic = BTREE_NODE_MAGIC; }
 
-    uint8_t get_version() const { return m_pers_header.version; }
-    uint16_t get_checksum() const { return m_pers_header.checksum; }
+    uint8_t version() const { return m_pers_header.version; }
+    uint16_t checksum() const { return m_pers_header.checksum; }
     void init_checksum() { m_pers_header.checksum = 0; }
 
     void set_node_id(bnodeid_t id) { m_pers_header.node_id = id; }
-    bnodeid_t get_node_id() const { return m_pers_header.node_id; }
+    bnodeid_t node_id() const { return m_pers_header.node_id; }
 
 #ifndef NO_CHECKSUM
     void set_checksum(size_t size) { m_pers_header.checksum = crc16_t10dif(init_crc_16, m_node_area, size); }
     bool verify_node(size_t size, verify_result& vr) const {
         HS_DEBUG_ASSERT_EQ(is_valid_node(), true, "verifying invalide node {}!", m_pers_header.to_string());
-        vr.act_magic = get_magic();
+        vr.act_magic = magic();
         vr.exp_magic = BTREE_NODE_MAGIC;
-        vr.act_checksum = get_checksum();
+        vr.act_checksum = checksum();
         vr.exp_checksum = crc16_t10dif(init_crc_16, m_node_area, size);
         return (vr.act_magic == vr.exp_magic && vr.act_checksum == vr.exp_checksum) ? true : false;
     }
@@ -145,7 +145,7 @@ protected:
 
     void set_leaf(bool leaf) { get_persistent_header()->leaf = leaf; }
     void set_node_type(btree_node_type t) { get_persistent_header()->node_type = uint32_cast(t); }
-    uint64_t get_gen() const { return m_pers_header.node_gen; }
+    uint64_t node_gen() const { return m_pers_header.node_gen; }
     void inc_gen() { get_persistent_header()->node_gen++; }
     void set_gen(uint64_t g) { get_persistent_header()->node_gen = g; }
 
@@ -177,7 +177,7 @@ protected:
     bnodeid_t next_bnode() const { return m_pers_header.next_node; }
     void set_next_bnode(bnodeid_t b) { get_persistent_header()->next_node = b; }
 
-    bnodeid_t get_edge_id() const { return m_pers_header.edge_entry; }
+    bnodeid_t edge_id() const { return m_pers_header.edge_entry; }
     void set_edge_id(bnodeid_t edge) { get_persistent_header()->edge_entry = edge; }
 
     typedef std::pair< bool, int > node_find_result_t;
@@ -187,7 +187,7 @@ protected:
     // Assumption: Node lock is already taken
     node_find_result_t find(const BtreeSearchRange& range, BtreeKey* outkey, BtreeValue* outval, bool copy_key = true,
                             bool copy_val = true) const {
-        LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}", m_pers_header.to_string());
+        LOGMSG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}", m_pers_header.to_string());
 
         auto result = bsearch_node(range);
         if (result.end_of_search_index == int_cast(total_entries()) && !has_valid_edge()) {
@@ -228,7 +228,7 @@ protected:
 
     uint32_t get_all(const BtreeSearchRange& range, uint32_t max_count, int& start_ind, int& end_ind,
                      std::vector< std::pair< K, V > >* out_values = nullptr) const {
-        LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}", m_pers_header.to_string());
+        LOGMSG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}", m_pers_header.to_string());
         auto count = 0U;
 
         // Get the start index of the search range.
@@ -310,11 +310,11 @@ protected:
     }
 
     bool put(const BtreeKey& key, const BtreeValue& val, btree_put_type put_type, BtreeValue& existing_val) {
-        DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
+        DEBUG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC);
         auto result = find(key, nullptr, nullptr);
         bool ret = true;
 
-        LOGMSG_ASSERT((get_magic() == BTREE_NODE_MAGIC), "{}", m_pers_header.to_string());
+        LOGMSG_ASSERT((magic() == BTREE_NODE_MAGIC), "{}", m_pers_header.to_string());
         if (put_type == btree_put_type::INSERT_ONLY_IF_NOT_EXISTS) {
             if (result.found) {
                 LOGINFO("entry already exist");
@@ -336,9 +336,9 @@ protected:
         } else {
             assert(false);
         }
-        DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
+        DEBUG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC);
 
-        LOGMSG_ASSERT((get_magic() == BTREE_NODE_MAGIC), "{}", m_pers_header.to_string());
+        LOGMSG_ASSERT((magic() == BTREE_NODE_MAGIC), "{}", m_pers_header.to_string());
         return ret;
     }
 
@@ -346,7 +346,7 @@ protected:
         auto result = find(key, nullptr, nullptr);
         assert(!is_leaf() || (!result.found)); // We do not support duplicate keys yet
         auto ret = to_variant_node().insert(result.end_of_search_index, key, val);
-        DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
+        DEBUG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC);
         return ret;
     }
 
@@ -355,7 +355,7 @@ protected:
         if (!result.found) { return false; }
 
         to_variant_node().remove(result.end_of_search_index);
-        LOGMSG_ASSERT((get_magic() == BTREE_NODE_MAGIC), "{}", m_pers_header.to_string());
+        LOGMSG_ASSERT((magic() == BTREE_NODE_MAGIC), "{}", m_pers_header.to_string());
         return true;
     }
 
@@ -365,7 +365,7 @@ protected:
         to_variant_node().get_nth_value(index, &nth_val, false);
         nth_val.append_blob(val, existing_val);
         to_variant_node().update(index, key, nth_val);
-        DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
+        DEBUG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC);
     }
 
     /* Update the key and value pair and after update if outkey and outval are non-nullptr, it fills them with
@@ -374,26 +374,26 @@ protected:
         auto result = find(key, outkey, outval);
         assert(result.found);
         to_variant_node().update(result.end_of_search_index, val);
-        LOGMSG_ASSERT((get_magic() == BTREE_NODE_MAGIC), "{}", m_pers_header.to_string());
+        LOGMSG_ASSERT((magic() == BTREE_NODE_MAGIC), "{}", m_pers_header.to_string());
     }
 
     //////////// Edge Related Methods ///////////////
     void invalidate_edge() { set_edge_id(empty_bnodeid); }
 
     void set_edge_value(const BtreeValue& v) {
-        BtreeNodeInfo* bni = (BtreeNodeInfo*)&v;
+        BtreeLinkInfo* bni = (BtreeLinkInfo*)&v;
         set_edge_id(bni->bnode_id());
-        DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
+        DEBUG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC);
     }
 
     void get_edge_value(BtreeValue* v) const {
         if (is_leaf()) { return; }
-        v->set_blob(BtreeNodeInfo(get_edge_id()).get_blob());
+        v->set_blob(BtreeLinkInfo(edge_id()).get_blob());
     }
 
     bool has_valid_edge() const {
         if (is_leaf()) { return false; }
-        return (get_edge_id() != empty_bnodeid);
+        return (edge_id() != empty_bnodeid);
     }
 
     void get_adjacent_indicies(uint32_t cur_ind, vector< int >& indices_list, uint32_t max_indices) const {
@@ -423,7 +423,7 @@ protected:
 
 protected:
     node_find_result_t bsearch_node(const BtreeSearchRange& range) const {
-        DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
+        DEBUG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC);
         const auto ret = bsearch(-1, total_entries(), range);
         const auto selection = range.multi_option();
 

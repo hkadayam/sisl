@@ -52,7 +52,7 @@ btree_status_t Btree< K, V >::do_sweep_query(BtreeNodePtr< K >& my_node, BtreeQu
         return ret;
     }
 
-    BtreeNodeInfo start_child_info;
+    BtreeLinkInfo start_child_info;
     const auto [isfound, idx] = my_node->find(qreq.next_key(), &start_child_info, false);
     ASSERT_IS_VALID_INTERIOR_CHILD_INDX(isfound, idx, my_node);
 
@@ -106,7 +106,7 @@ btree_status_t Btree< K, V >::do_traversal_query(const BtreeNodePtr< K >& my_nod
     idx = start_idx;
 
     while (idx <= end_idx) {
-        BtreeNodeInfo child_info;
+        BtreeLinkInfo child_info;
         my_node->get_nth_value(idx, &child_info, false);
         BtreeNodePtr< K > child_node = nullptr;
         locktype_t child_cur_lock = locktype_t::READ;
@@ -177,8 +177,7 @@ btree_status_t do_serialzable_query(const BtreeNodePtr< K >& my_node, BtreeSeria
     if (start_ret.end_of_search_index == end_ret.end_of_search_index) {
         BT_LOG_ASSERT_CMP(start_child_ptr, ==, end_child_ptr, my_node);
 
-        ret =
-            read_and_lock_node(start_child_ptr.get_node_id(), child_node, locktype_t::READ, locktype_t::READ, nullptr);
+        ret = read_and_lock_node(start_child_ptr.node_id(), child_node, locktype_t::READ, locktype_t::READ, nullptr);
         if (ret != btree_status_t::success) {
             unlock_node(my_node, locktype_t::READ);
             return ret;
@@ -196,7 +195,7 @@ btree_status_t do_serialzable_query(const BtreeNodePtr< K >& my_node, BtreeSeria
         for (auto i = start_ret.end_of_search_index; i <= end_ret.end_of_search_index; i++) {
             BtreeNodeId child_ptr;
             my_node->get_nth_value(i, &child_ptr, false);
-            ret = read_and_lock_node(child_ptr.get_node_id(), child_node, locktype_t::READ, locktype_t::READ, nullptr);
+            ret = read_and_lock_node(child_ptr.node_id(), child_node, locktype_t::READ, locktype_t::READ, nullptr);
             if (ret != btree_status_t::success) {
                 unlock_node(my_node, locktype_t::READ);
                 return ret;

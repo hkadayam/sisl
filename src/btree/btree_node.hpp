@@ -67,14 +67,15 @@ struct persistent_hdr_t {
     uint32_t leaf : 1;
     uint32_t valid_node : 1;
 
-    uint64_t node_gen;
-    bnodeid_t edge_entry;
+    uint64_t node_gen;     // Generation of this node, incremented on every update
+    uint64_t link_version; // Version of the link between its parent, updated if structure changes
+    bnodeid_t edge_entry;  // Edge entries node id, invalid node if its non-edge
 
     std::string to_string() const {
         return fmt::format("magic={} version={} csum={} node_id={} next_node={} nentries={} node_type={} is_leaf={} "
-                           "valid_node={} node_gen={} edge_entry={}",
+                           "valid_node={} node_gen={} link_version={} edge_entry={}",
                            magic, version, checksum, node_id, next_node, nentries, node_type, leaf, valid_node,
-                           node_gen, edge_entry);
+                           node_gen, link_version, edge_entry);
     }
 };
 #pragma pack()
@@ -101,16 +102,19 @@ public:
             set_edge_id(empty_bnodeid);
             set_node_id(id);
         } else {
-            DEBUG_ASSERT_EQ(get_node_id(), id);
-            DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
-            DEBUG_ASSERT_EQ(get_version(), BTREE_NODE_VERSION);
+            DEBUG_ASSERT_EQ(node_id(), id);
+            DEBUG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC);
+            DEBUG_ASSERT_EQ(version(), BTREE_NODE_VERSION);
         }
         m_trans_hdr.is_leaf_node = is_leaf;
     }
     virtual ~BtreeNode() = default;
 
+    // Identify if a node is a leaf node or not, from raw buffer, by just reading persistent_hdr_t
+    static bool identify_leaf_node(uint8_t* buf) { return (r_cast< persistent_hdr_t* >(buf))->leaf; }
+
     node_find_result_t find(const BtreeKey& key, BtreeValue* outval, bool copy_val) const {
-        LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}",
+        LOGMSG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}",
                          get_persistent_header_const()->to_string());
 
         auto [found, idx] = bsearch_node(key);
@@ -119,7 +123,7 @@ public:
                 DEBUG_ASSERT_EQ(found, false);
                 return std::make_pair(found, idx);
             }
-            if (outval) { *((BtreeNodeInfo*)outval) = get_edge_value(); }
+            if (outval) { *((BtreeLinkInfo*)outval) = get_edge_value(); }
         } else {
             if (outval) { get_nth_value(idx, outval, copy_val); }
         }
@@ -129,7 +133,7 @@ public:
     template < typename V >
     uint32_t get_all(const BtreeKeyRange< K >& range, uint32_t max_count, uint32_t& start_idx, uint32_t& end_idx,
                      std::vector< std::pair< K, V > >* out_values = nullptr) const {
-        LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}",
+        LOGMSG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}",
                          get_persistent_header_const()->to_string());
         auto count = 0U;
         bool sfound, efound;
@@ -168,7 +172,7 @@ public:
 
     std::pair< bool, uint32_t > get_any(const BtreeKeyRange< K >& range, BtreeKey* out_key, BtreeValue* out_val,
                                         bool copy_key, bool copy_val) const {
-        LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}",
+        LOGMSG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}",
                          get_persistent_header_const()->to_string());
         uint32_t result_idx;
         const auto mm_opt = range.multi_option();
@@ -218,7 +222,7 @@ public:
     }
 
     bool put(const BtreeKey& key, const BtreeValue& val, btree_put_type put_type, BtreeValue* existing_val) {
-        LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}",
+        LOGMSG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC, "Magic mismatch on btree_node {}",
                          get_persistent_header_const()->to_string());
         bool ret = true;
 
@@ -251,7 +255,7 @@ public:
         const auto [found, idx] = find(key, nullptr, false);
         DEBUG_ASSERT(!is_leaf() || (!found), "Invalid node"); // We do not support duplicate keys yet
         insert(idx, key, val);
-        DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "{}", get_persistent_header_const()->to_string());
+        DEBUG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC, "{}", get_persistent_header_const()->to_string());
         return btree_status_t::success;
     }
 
@@ -260,7 +264,7 @@ public:
         if (found) {
             if (outkey) { *outkey = get_nth_key(idx, true); }
             remove(idx);
-            LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "{}", get_persistent_header_const()->to_string());
+            LOGMSG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC, "{}", get_persistent_header_const()->to_string());
         }
         return found;
     }
@@ -269,7 +273,7 @@ public:
         const auto [found, idx] = get_any(range, outkey, outval, true, true);
         if (found) {
             remove(idx);
-            LOGMSG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC, "{}", get_persistent_header_const()->to_string());
+            LOGMSG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC, "{}", get_persistent_header_const()->to_string());
         }
         return found;
     }
@@ -280,7 +284,7 @@ public:
         const auto [found, idx] = find(key, outval, true);
         if (found) {
             update(idx, val);
-            LOGMSG_ASSERT((get_magic() == BTREE_NODE_MAGIC), "{}", get_persistent_header_const()->to_string());
+            LOGMSG_ASSERT((magic() == BTREE_NODE_MAGIC), "{}", get_persistent_header_const()->to_string());
         }
         return found;
     }
@@ -381,12 +385,14 @@ public:
         return true;
     }
 
-    virtual BtreeNodeInfo get_edge_value() const { return BtreeNodeInfo{get_edge_id()}; }
+    virtual BtreeLinkInfo get_edge_value() const { return BtreeLinkInfo{edge_id(), link_version()}; }
 
     virtual void set_edge_value(const BtreeValue& v) {
         const auto b = v.serialize();
-        ASSERT_EQ(b.size, sizeof(bnodeid_t));
-        set_edge_id(*r_cast< bnodeid_t* >(b.bytes));
+        BtreeLinkInfo* l = r_cast< BtreeLinkInfo* >(b.bytes);
+        ASSERT_EQ(b.size, sizeof(BtreeLinkInfo));
+        set_edge_id(l->edge_id());
+        set_link_version(l->link_version());
     }
 
     void invalidate_edge() { set_edge_id(empty_bnodeid); }
@@ -458,6 +464,7 @@ public:
     virtual btree_status_t insert(uint32_t ind, const BtreeKey& key, const BtreeValue& val) = 0;
     virtual void remove(uint32_t ind) { remove(ind, ind); }
     virtual void remove(uint32_t ind_s, uint32_t ind_e) = 0;
+    virtual void remove_all(const BtreeConfig& cfg) = 0;
     virtual void update(uint32_t ind, const BtreeValue& val) = 0;
     virtual void update(uint32_t ind, const BtreeKey& key, const BtreeValue& val) = 0;
     virtual void append(uint32_t ind, const BtreeKey& key, const BtreeValue& val) = 0;
@@ -469,12 +476,12 @@ public:
     // Method just to please compiler
     template < typename V >
     V edge_value_internal() const {
-        return V{get_edge_id()};
+        return V{edge_id()};
     }
 
 private:
     node_find_result_t bsearch_node(const BtreeKey& key) const {
-        DEBUG_ASSERT_EQ(get_magic(), BTREE_NODE_MAGIC);
+        DEBUG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC);
         auto [found, idx] = bsearch(-1, total_entries(), key);
         if (found) { DEBUG_ASSERT_LT(idx, total_entries()); }
 
@@ -513,15 +520,15 @@ public:
     uint8_t* node_data_area() { return (m_phys_node_buf + sizeof(persistent_hdr_t)); }
     const uint8_t* node_data_area_const() const { return (m_phys_node_buf + sizeof(persistent_hdr_t)); }
 
-    uint8_t get_magic() const { return get_persistent_header_const()->magic; }
+    uint8_t magic() const { return get_persistent_header_const()->magic; }
     void set_magic() { get_persistent_header()->magic = BTREE_NODE_MAGIC; }
 
-    uint8_t get_version() const { return get_persistent_header_const()->version; }
-    uint16_t get_checksum() const { return get_persistent_header_const()->checksum; }
+    uint8_t version() const { return get_persistent_header_const()->version; }
+    uint16_t checksum() const { return get_persistent_header_const()->checksum; }
     void init_checksum() { get_persistent_header()->checksum = 0; }
 
     void set_node_id(bnodeid_t id) { get_persistent_header()->node_id = id; }
-    bnodeid_t get_node_id() const { return get_persistent_header_const()->node_id; }
+    bnodeid_t node_id() const { return get_persistent_header_const()->node_id; }
 
 #ifndef NO_CHECKSUM
     void set_checksum(const BtreeConfig& cfg) {
@@ -532,7 +539,7 @@ public:
         HS_DEBUG_ASSERT_EQ(is_valid_node(), true, "verifying invalide node {}!",
                            get_persistent_header_const()->to_string());
         auto exp_checksum = crc16_t10dif(init_crc_16, node_data_area_const(), cfg.node_data_size());
-        return ((get_magic() == BTREE_NODE_MAGIC) && (get_checksum() == exp_checksum));
+        return ((magic() == BTREE_NODE_MAGIC) && (checksum() == exp_checksum));
     }
 #endif
 
@@ -550,12 +557,17 @@ public:
 
     void set_leaf(bool leaf) { get_persistent_header()->leaf = leaf; }
     void set_node_type(btree_node_type t) { get_persistent_header()->node_type = uint32_cast(t); }
-    uint64_t get_gen() const { return get_persistent_header_const()->node_gen; }
+    uint64_t node_gen() const { return get_persistent_header_const()->node_gen; }
     void inc_gen() { get_persistent_header()->node_gen++; }
     void set_gen(uint64_t g) { get_persistent_header()->node_gen = g; }
+    uint64_t link_version() const { return get_persistent_header_const()->link_version; }
+    void set_link_version(uint64_t version) { return get_persistent_header()->link_version = version; }
+    void inc_link_version() const { ++(get_persistent_header()->link_version); }
 
     void set_valid_node(bool valid) { get_persistent_header()->valid_node = (valid ? 1 : 0); }
     bool is_valid_node() const { return get_persistent_header_const()->valid_node; }
+
+    BtreeLinkInfo link_info() const { return BtreeNodeInfo{node_id(), link_version()}; }
 
     uint32_t occupied_size(const BtreeConfig& cfg) const { return (cfg.node_data_size() - available_size(cfg)); }
     bool is_merge_needed(const BtreeConfig& cfg) const {
@@ -575,12 +587,12 @@ public:
     bnodeid_t next_bnode() const { return get_persistent_header_const()->next_node; }
     void set_next_bnode(bnodeid_t b) { get_persistent_header()->next_node = b; }
 
-    bnodeid_t get_edge_id() const { return get_persistent_header_const()->edge_entry; }
+    bnodeid_t edge_id() const { return get_persistent_header_const()->edge_entry; }
     void set_edge_id(bnodeid_t edge) { get_persistent_header()->edge_entry = edge; }
 
     bool has_valid_edge() const {
         if (is_leaf()) { return false; }
-        return (get_edge_id() != empty_bnodeid);
+        return (edge_id() != empty_bnodeid);
     }
 };
 

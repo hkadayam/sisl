@@ -73,7 +73,7 @@ retry:
 
     curr_idx = start_idx;
     while (curr_idx <= end_idx) {
-        BtreeNodeInfo child_info;
+        BtreeLinkInfo child_info;
         BtreeNodePtr< K > child_node;
         ret = get_child_and_lock_node(my_node, curr_idx, child_info, child_node, locktype_t::READ, locktype_t::WRITE,
                                       req.m_op_context);
@@ -260,14 +260,14 @@ btree_status_t Btree< K, V >::check_collapse_root(ReqT& req) {
     }
 
     BT_NODE_DBG_ASSERT_EQ(root->has_valid_edge(), true, root);
-    ret = read_and_lock_node(root->get_edge_id(), child, locktype_t::WRITE, locktype_t::WRITE, req.m_op_context);
+    ret = read_and_lock_node(root->edge_id(), child, locktype_t::WRITE, locktype_t::WRITE, req.m_op_context);
     if (ret != btree_status_t::success) {
         unlock_node(root, locktype_t::WRITE);
         goto done;
     }
 
     free_node(root, locktype_t::WRITE, req.m_op_context);
-    m_root_node_id = child->get_node_id();
+    m_root_node_id = child->node_id();
     unlock_node(child, locktype_t::WRITE);
 
     // TODO: Have a precommit code here to notify the change in root node id
@@ -310,7 +310,7 @@ btree_status_t Btree< K, V >::merge_nodes(const BtreeNodePtr< K >& parent_node, 
                                "Assertion failure, expected valid edge for parent_node: {}");
         }
 
-        BtreeNodeInfo child_info;
+        BtreeLinkInfo child_info;
         parent_node->get_nth_value(indx, &child_info, false /* copy */);
 
         BtreeNodePtr< K > child;
@@ -414,22 +414,20 @@ btree_status_t Btree< K, V >::merge_nodes(const BtreeNodePtr< K >& parent_node, 
             K last_key = (*it)->get_last_key(); // last key in child
             (*it)->set_next_bnode(next_node_id);
 
-            auto this_node_id = (*it)->get_node_id();
-            BtreeNodeInfo ninfo{this_node_id};
+            auto this_node_id = (*it)->node_id();
+            BtreeLinkInfo ninfo{this_node_id};
             parent_node->update(parent_idx--, last_key, ninfo);
             write_node(*it, last_new_node, context);
             last_new_node = *it;
             next_node_id = this_node_id;
         }
-        parent_node->update(parent_idx--, leftmost_node->get_last_key(), BtreeNodeInfo{leftmost_node->get_node_id()});
+        parent_node->update(parent_idx--, leftmost_node->get_last_key(), BtreeLinkInfo{leftmost_node->node_id()});
         parent_node->remove(start_idx, parent_idx);
 
         leftmost_node->set_next_bnode(next_node_id);
         write_node(leftmost_node, last_new_node, context);
         write_node(parent_node, leftmost_node, context);
     }
-
-    merge_node_precommit(false, parent_node, start_idx, leftmost_node, &old_nodes, &new_nodes, context);
 
 out:
     // Do free/unlock based on success/failure in reverse order
@@ -446,6 +444,55 @@ out:
         }
     }
     return ret;
+}
+
+template < typename K, typename V >
+btree_status_t Btree< K, V >::repair_merge(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& left_child,
+                                           uint32_t parent_merge_idx, void* context) {
+    // Get next 2 entries after left child which were merge would have happend, from parent point of view. The 2 entries
+    // is an example, but generically it is m_max_merge_nodes - 1 from left child are gathered.
+    std::vector< bnodeid_t > old_child_ids;
+    for (auto idx = parent_merge_idx + 1; idx <= parent_merge_idx + m_bt_cfg.m_max_merge_nodes; ++idx) {
+        if (idx < total_entries()) {
+            BtreeLinkInfo ninfo;
+            parent_node->get_nth_value(idx, &ninfo, true);
+            old_child_ids.push_back(ninfo.node_id());
+        } else {
+            if (parent_node->has_valid_edge()) { old_child_ids.push_back(parent_node->edge_id()); }
+            break;
+        }
+    }
+
+    // Collect same amount from child perspective
+    std::vector< BtreeNodePtr< K > > new_nodes;
+    auto next_nodeid = left_child->get_next_bnode();
+    BtreeNodePtr< K > prev_node = nullptr;
+    for (auto i = 0; (i < m_bt_cfg.m_max_merge_nodes) && (next_nodeid != empty_bnodeid); ++i) {
+        BtreeNodePtr< K > child_node;
+        ret = read_and_lock_node(next_nodeid, child_node, locktype_t::READ, locktype_t::READ, context);
+        if (ret != btree_status_t::success) { goto done; }
+
+        // Search if this id is in list of old child ids. If so, then this is the point before which the parent has
+        // deviated. So all nodes prior to these are new nodes.
+        /*        while (old_child_ids.size() && (next_nodeid != old_child_ids[0])) {
+                    parent_node->remove(parent_idx);
+                    old_child_ids.erase(old_child_ids.begin());
+                }*/][]
+        auto old_idx = 0;
+        while (old_idx < old_child_ids.size()) {
+            if (next_nodeid == old_child_ids[old_idx]) { break; }
+            ++old_idx;
+        }
+        if (old_idx < old_child_ids.size()) { break; }
+
+        next_nodeid = child_node->get_next_bnode();
+        new_nodes.push_back(std::move(child_node));
+    }
+    BT_NODE_REL_ASSERT_LE(new_nodes.size(), old_child_ids.size(), parent_node);
+
+    parent_node->update(parent_split_idx, child_node1->get_next_bnode());
+    parent_node->insert(parent_split_idx, child_node1->get_last_key(), child_node1->node_id());
+    return write_node(parent_node, context);
 }
 
 #if 0
@@ -481,7 +528,7 @@ btree_status_t Btree< K, V >::merge_nodes(const BtreeNodePtr< K >& parent_node, 
                                "Assertion failure, expected valid edge for parent_node: {}");
         }
 
-        BtreeNodeInfo child_info;
+        BtreeLinkInfo child_info;
         parent_node->get_nth_value(indx, &child_info, false /* copy */);
 
         BtreeNodePtr< K > child;
@@ -546,11 +593,11 @@ btree_status_t Btree< K, V >::merge_nodes(const BtreeNodePtr< K >& parent_node, 
 
         /* update the last key of merge node in parent node */
         last_ckey = merge_node->get_last_key(); // last key in child
-        BtreeNodeInfo ninfo(merge_node->get_node_id());
+        BtreeLinkInfo ninfo(merge_node->node_id());
         parent_node->update(parent_insert_indx, last_ckey, ninfo);
         ++parent_insert_indx;
 
-        merge_node->set_next_bnode(new_nodes[i]->get_node_id()); // link them
+        merge_node->set_next_bnode(new_nodes[i]->node_id()); // link them
         merge_node = new_nodes[i];
         if (merge_node != left_most_node) {
             /* left most node is not replaced */
@@ -567,7 +614,7 @@ btree_status_t Btree< K, V >::merge_nodes(const BtreeNodePtr< K >& parent_node, 
 
     /* update the last key */
     {
-        BtreeNodeInfo ninfo(merge_node->get_node_id());
+        BtreeLinkInfo ninfo(merge_node->node_id());
         parent_node->update(parent_insert_indx, last_ckey, ninfo);
         ++parent_insert_indx;
     }
@@ -587,7 +634,7 @@ btree_status_t Btree< K, V >::merge_nodes(const BtreeNodePtr< K >& parent_node, 
     /* write the journal entry */
     if (BtreeStoreType == btree_store_type::SSD_BTREE) {
         auto j_iob = btree_store_t::make_journal_entry(journal_op::BTREE_MERGE, false /* is_root */, bcp,
-                                                       {parent_node->get_node_id(), parent_node->get_gen()});
+                                                       {parent_node->node_id(), parent_node->node_gen()});
         K child_pkey;
         if (start_idxx < parent_node->total_entries()) {
             parent_node->get_nth_key(start_idxx, &child_pkey, true);

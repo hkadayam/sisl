@@ -4,6 +4,11 @@
 namespace sisl {
 namespace btree {
 
+template < typename K >
+static bool is_repair_needed(const BtreeNodePtr< K >& child_node, BtreeLinkInfo& child_info) {
+    return child_info.link_version() != child_node->link_version();
+}
+
 /* This function does the heavy lifiting of co-ordinating inserts. It is a recursive function which walks
  * down the tree.
  *
@@ -62,7 +67,7 @@ retry:
         locktype_t child_cur_lock = locktype_t::NONE;
 
         // Get the childPtr for given key.
-        BtreeNodeInfo child_info;
+        BtreeLinkInfo child_info;
         BtreeNodePtr< K > child_node;
         ret = get_child_and_lock_node(my_node, curr_idx, child_info, child_node, locktype_t::READ, locktype_t::WRITE,
                                       req.m_op_context);
@@ -80,7 +85,9 @@ retry:
         // Directly get write lock for leaf, since its an insert.
         child_cur_lock = (child_node->is_leaf()) ? locktype_t::WRITE : locktype_t::READ;
 
-        if (is_split_needed(child_node, m_bt_cfg, req)) {
+        // If the child and child_info link in the parent mismatch, we need to do btree repair, it might have
+        // encountered a crash in-between the split or merge and only partial commit happened.
+        if (is_split_needed(child_node, m_bt_cfg, req) || is_repair_needed(child_node, child_info)) {
             if (curlock != locktype_t::WRITE) {
                 ret = upgrade_node_locks(my_node, child_node, child_cur_lock, req.m_op_context);
                 if (ret != btree_status_t::success) {
@@ -92,8 +99,12 @@ retry:
                 curlock = locktype_t::WRITE;
             }
 
-            K split_key;
-            ret = split_node(my_node, child_node, curr_idx, &split_key, false /* root_split */, req.m_op_context);
+            if (is_repair_needed(child_node, child_info)) {
+                ret = repair_split(my_node, child_node, curr_idx, req.m_op_context);
+            } else {
+                K split_key;
+                ret = split_node(my_node, child_node, curr_idx, &split_key, req.m_op_context);
+            }
             unlock_node(child_node, locktype_t::WRITE);
             child_cur_lock = locktype_t::NONE;
 
@@ -108,8 +119,8 @@ retry:
         // Get subrange if it is a range update
         if constexpr (std::is_same_v< ReqT, BtreeRangePutRequest< K > >) {
             if (child_node->is_leaf()) {
-                // We get the trimmed range only for leaf because this is where we will be inserting keys. In interior
-                // nodes, keys are always propogated from the lower nodes.
+                // We get the trimmed range only for leaf because this is where we will be inserting keys. In
+                // interior nodes, keys are always propogated from the lower nodes.
                 bool is_inp_key_lesser;
                 req.trim_working_range(
                     my_node->min_of(s_cast< const K& >(req.input_range().end_key()), curr_idx, is_inp_key_lesser),
@@ -193,7 +204,7 @@ btree_status_t Btree< K, V >::mutate_write_leaf_node(const BtreeNodePtr< K >& my
     }
 
     if ((ret == btree_status_t::success) || (ret == btree_status_t::has_more)) {
-        write_node(my_node, nullptr, req.m_op_context);
+        write_node(my_node, req.m_op_context);
     }
     return ret;
 }
@@ -247,9 +258,9 @@ btree_status_t Btree< K, V >::mutate_extents_in_leaf(const BtreeNodePtr< K >& no
                     if (tail_offset > 0) { node->get_nth_value(end_idx, &tail_v, false); }
                 }
 
-                // Shortcut to simple update of the existing range, which is a normal case. Its a simple update only if
-                // the value we are replacing is all equal sized for every extent piece (which is normal use cases of
-                // the extents)
+                // Shortcut to simple update of the existing range, which is a normal case. Its a simple update only
+                // if the value we are replacing is all equal sized for every extent piece (which is normal use
+                // cases of the extents)
                 if (start_found && end_found && (head_offset == 0) && (tail_offset == 0) && (start_idx == end_idx) &&
                     new_value->is_equal_sized()) {
                     call_on_update_kv_cb(node, start_idx, new_k, rpreq);
@@ -257,12 +268,12 @@ btree_status_t Btree< K, V >::mutate_extents_in_leaf(const BtreeNodePtr< K >& no
                     break;
                 }
 
-                // Do size check, first check if we can accomodate the keys if checked conservatively. Thats most common
-                // case and thus efficient. Next we go aggressively, the more aggressive the check, more performance
-                // impact.
+                // Do size check, first check if we can accomodate the keys if checked conservatively. Thats most
+                // common case and thus efficient. Next we go aggressively, the more aggressive the check, more
+                // performance impact.
                 //
-                // First level check: Try assuming the entire value + 2 keys + 2 records to be inserted. If there is a
-                // space available, no need any additional check.
+                // First level check: Try assuming the entire value + 2 keys + 2 records to be inserted. If there is
+                // a space available, no need any additional check.
                 auto const record_size = (2 * (new_k.serialized_size() + node->get_record_size()));
                 auto size_needed = new_value->extracted_size(0, new_k.extent_length()) + record_size;
 
@@ -270,7 +281,8 @@ btree_status_t Btree< K, V >::mutate_extents_in_leaf(const BtreeNodePtr< K >& no
                 if (size_needed > available_space) {
                     BT_NODE_DBG_ASSERT_EQ(retry, false, node, "Don't expect multiple attempts of size not available");
 
-                    // Second level check: Take into account the head and tail overlapped space and see if it saves some
+                    // Second level check: Take into account the head and tail overlapped space and see if it saves
+                    // some
                     if (head_offset > 0) {
                         size_needed -= (head_v.serialized_size() - head_v.extracted_size(0, head_offset));
                     }
@@ -297,8 +309,8 @@ btree_status_t Btree< K, V >::mutate_extents_in_leaf(const BtreeNodePtr< K >& no
                 }
                 retry = false;
 
-                // Write partial head and tail kv. At this point we are committing and we can't go back and not update
-                // some of the extents.
+                // Write partial head and tail kv. At this point we are committing and we can't go back and not
+                // update some of the extents.
                 if (end_idx == start_idx) {
                     // Special case - where there is a overlap and single entry is split into 3
                     auto const tail_start = tail_k.extent_length() - tail_offset;
@@ -369,7 +381,7 @@ btree_status_t Btree< K, V >::check_split_root(ReqT& req) {
     BtreeNodePtr< K > new_root;
 
     m_btree_lock.lock();
-    ret = read_and_lock_node(m_root_node_id, root, locktype_t::WRITE, locktype_t::WRITE, req.m_op_context);
+    ret = read_and_lock_node(m_root_node_info->node_id(), root, locktype_t::WRITE, locktype_t::WRITE, req.m_op_context);
     if (ret != btree_status_t::success) { goto done; }
 
     if (!is_split_needed(root, m_bt_cfg, req)) {
@@ -384,21 +396,20 @@ btree_status_t Btree< K, V >::check_split_root(ReqT& req) {
         goto done;
     }
 
-    BT_NODE_LOG(DEBUG, root, "Root node is full, creating new root node", new_root->get_node_id());
-    new_root->set_edge_value(BtreeNodeInfo{root->get_node_id()});
+    BT_NODE_LOG(DEBUG, root, "Root node is full, creating new root node", new_root->node_id());
     child_node = std::move(root);
     root = std::move(new_root);
     BT_NODE_DBG_ASSERT_EQ(root->total_entries(), 0, root);
 
-    ret = split_node(root, child_node, root->total_entries(), &split_key, true, req.m_op_context);
+    ret = split_node(root, child_node, root->total_entries(), &split_key, req.m_op_context);
     if (ret != btree_status_t::success) {
         free_node(root, locktype_t::WRITE, req.m_op_context);
         root = std::move(child_node);
         unlock_node(root, locktype_t::WRITE);
     } else {
-        m_root_node_id = root->get_node_id();
+        root->set_edge_value(BtreeLinkInfo{child_node->node_id(), child_node->link_version()});
 
-        // TODO: Precommit the new root node id for persistent btree to recover from
+        m_root_node_info = BtreeLinkInfo{root->node_id(), root->link_version()};
         unlock_node(child_node, locktype_t::WRITE);
         COUNTER_INCREMENT(m_metrics, btree_depth, 1);
     }
@@ -410,8 +421,7 @@ done:
 
 template < typename K, typename V >
 btree_status_t Btree< K, V >::split_node(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node,
-                                         uint32_t parent_ind, BtreeKey* out_split_key, bool root_split, void* context) {
-    BtreeNodeInfo ninfo;
+                                         uint32_t parent_ind, BtreeKey* out_split_key, void* context) {
     BtreeNodePtr< K > child_node1 = child_node;
     BtreeNodePtr< K > child_node2 = child_node1->is_leaf() ? alloc_leaf_node() : alloc_interior_node();
 
@@ -420,7 +430,7 @@ btree_status_t Btree< K, V >::split_node(const BtreeNodePtr< K >& parent_node, c
     btree_status_t ret = btree_status_t::success;
 
     child_node2->set_next_bnode(child_node1->next_bnode());
-    child_node1->set_next_bnode(child_node2->get_node_id());
+    child_node1->set_next_bnode(child_node2->node_id());
     uint32_t child1_filled_size = m_bt_cfg.node_data_size() - child_node1->available_size(m_bt_cfg);
 
     auto split_size = m_bt_cfg.split_size(child1_filled_size);
@@ -446,54 +456,27 @@ btree_status_t Btree< K, V >::split_node(const BtreeNodePtr< K >& parent_node, c
         return btree_status_t::retry;
     }
 
+    child_node1->inc_link_version();
+    child_node2->set_link_version(child_node1->link_version());
+
     // Update the existing parent node entry to point to second child ptr.
-    bool edge_split = (parent_ind == parent_node->total_entries());
-    ninfo.set_bnode_id(child_node2->get_node_id());
-    parent_node->update(parent_ind, ninfo);
+    parent_node->update(parent_ind, child_node2->link_info());
 
     // Insert the last entry in first child to parent node
     *out_split_key = child_node1->get_last_key();
-    ninfo.set_bnode_id(child_node1->get_node_id());
 
     // If key is extent then we always insert the tail portion of the extent key in the parent node
     if (out_split_key->is_extent_key()) {
-        parent_node->insert(((ExtentBtreeKey< K >*)out_split_key)->extract_end(false), ninfo);
+        parent_node->insert(((ExtentBtreeKey< K >*)out_split_key)->extract_end(false), child_node1->link_info());
     } else {
-        parent_node->insert(*out_split_key, ninfo);
+        parent_node->insert(*out_split_key, child_node1->link_info());
     }
 
     BT_NODE_DBG_ASSERT_GT(child_node2->get_first_key().compare(*out_split_key), 0, child_node2);
-    BT_NODE_LOG(DEBUG, parent_node, "Split child_node={} with new_child_node={}, split_key={}",
-                child_node1->get_node_id(), child_node2->get_node_id(), out_split_key->to_string());
+    BT_NODE_LOG(DEBUG, parent_node, "Split child_node={} with new_child_node={}, split_key={}", child_node1->node_id(),
+                child_node2->node_id(), out_split_key->to_string());
 
-    split_node_precommit(parent_node, child_node1, child_node2, root_split, edge_split, context);
-
-#if 0
-    if (BtreeStoreType == btree_store_type::SSD_BTREE) {
-        auto j_iob = btree_store_t::make_journal_entry(journal_op::BTREE_SPLIT, root_split, bcp,
-                                                       {parent_node->get_node_id(), parent_node->get_gen()});
-        btree_store_t::append_node_to_journal(
-            j_iob, (root_split ? bt_journal_node_op::creation : bt_journal_node_op::inplace_write), child_node1, bcp,
-            out_split_end_key.get_blob());
-
-        // For root split or split around the edge, we don't write the key, which will cause replay to insert
-        // edge
-        if (edge_split) {
-            btree_store_t::append_node_to_journal(j_iob, bt_journal_node_op::creation, child_node2, bcp);
-        } else {
-            K child2_pkey;
-            parent_node->get_nth_key(parent_ind, &child2_pkey, true);
-            btree_store_t::append_node_to_journal(j_iob, bt_journal_node_op::creation, child_node2, bcp,
-                                                  child2_pkey.get_blob());
-        }
-        btree_store_t::write_journal_entry(m_btree_store.get(), bcp, j_iob);
-    }
-#endif
-
-    // we write right child node, than left and than parent child
-    write_node(child_node2, nullptr, context);
-    write_node(child_node1, child_node2, context);
-    write_node(parent_node, child_node1, context);
+    ret = transact_write_nodes({child_node2}, child_node1, parent_node, context);
 
     // NOTE: Do not access parentInd after insert, since insert would have
     // shifted parentNode to the right.
@@ -510,7 +493,7 @@ bool Btree< K, V >::is_split_needed(const BtreeNodePtr< K >& node, const BtreeCo
 
     int64_t size_needed = 0;
     if (!node->is_leaf()) { // if internal node, size is atmost one additional entry, size of K/V
-        size_needed = K::get_estimate_max_size() + BtreeNodeInfo::get_fixed_size() + node->get_record_size();
+        size_needed = K::get_estimate_max_size() + BtreeLinkInfo::get_fixed_size() + node->get_record_size();
     } else if constexpr (std::is_same_v< ReqT, BtreeRangePutRequest< K > >) {
         const BtreeKey& next_key = req.next_key();
 
@@ -530,6 +513,14 @@ bool Btree< K, V >::is_split_needed(const BtreeNodePtr< K >& node, const BtreeCo
     }
     int64_t alreadyFilledSize = cfg.node_data_size() - node->available_size(cfg);
     return (alreadyFilledSize + size_needed >= cfg.ideal_fill_size());
+}
+
+template < typename K, typename V >
+btree_status_t Btree< K, V >::repair_split(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node1,
+                                           uint32_t parent_split_idx, void* context) {
+    parent_node->update(parent_split_idx, BtreeNodeInfo{child_node1->get_next_bnode(), child_node1->link_version()});
+    parent_node->insert(parent_split_idx, child_node1->get_last_key(), child_node1->link_info());
+    return write_node(parent_node, context);
 }
 
 #if 0

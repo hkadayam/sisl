@@ -190,6 +190,13 @@ ENUM(btree_status_t, uint32_t, success, not_found, retry, has_more, read_failed,
      refresh_failed, put_failed, space_not_avail, split_failed, insert_failed, cp_mismatch, merge_not_required,
      merge_failed, replay_not_needed, fast_path_not_possible, resource_full, crc_mismatch, not_supported, node_freed)
 
+ENUM(btree_node_write_type, uint8_t,
+     new_node,     // Node write whenever a new node is created.
+     inplace_leaf, // Node write after an entry is updated/added in leaf without changing btree structure, most common
+     inplace_interior, // Node write after a structure change, but this interior node is changed in-place only.
+     after_shift       // Node write after a structure change, but this node has its keys shifted to other node.
+);
+
 struct BtreeConfig {
     uint32_t m_node_size;
     uint32_t m_node_data_size;
