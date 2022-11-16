@@ -67,15 +67,16 @@ struct persistent_hdr_t {
     uint32_t leaf : 1;
     uint32_t valid_node : 1;
 
-    uint64_t node_gen;     // Generation of this node, incremented on every update
-    uint64_t link_version; // Version of the link between its parent, updated if structure changes
-    bnodeid_t edge_entry;  // Edge entries node id, invalid node if its non-edge
+    uint64_t node_gen{0};                // Generation of this node, incremented on every update
+    uint64_t link_version{0};            // Version of the link between its parent, updated if structure changes
+    bnodeid_t edge_entry{empty_bnodeid}; // Edge entries node id, invalid node if its non-edge
+    uint64_t edge_link_version{0};       // Version of the link between this node and its edge child
 
     std::string to_string() const {
         return fmt::format("magic={} version={} csum={} node_id={} next_node={} nentries={} node_type={} is_leaf={} "
-                           "valid_node={} node_gen={} link_version={} edge_entry={}",
+                           "valid_node={} node_gen={} link_version={} edge_entry={}, edge_link_version={}",
                            magic, version, checksum, node_id, next_node, nentries, node_type, leaf, valid_node,
-                           node_gen, link_version, edge_entry);
+                           node_gen, link_version, edge_entry, edge_link_version);
     }
 };
 #pragma pack()
@@ -97,9 +98,7 @@ public:
             set_leaf(is_leaf);
             set_total_entries(0);
             set_next_bnode(empty_bnodeid);
-            set_gen(0);
             set_valid_node(true);
-            set_edge_id(empty_bnodeid);
             set_node_id(id);
         } else {
             DEBUG_ASSERT_EQ(node_id(), id);
@@ -391,8 +390,7 @@ public:
         const auto b = v.serialize();
         BtreeLinkInfo* l = r_cast< BtreeLinkInfo* >(b.bytes);
         ASSERT_EQ(b.size, sizeof(BtreeLinkInfo));
-        set_edge_id(l->edge_id());
-        set_link_version(l->link_version());
+        set_edge_info(*l);
     }
 
     void invalidate_edge() { set_edge_id(empty_bnodeid); }
@@ -562,12 +560,12 @@ public:
     void set_gen(uint64_t g) { get_persistent_header()->node_gen = g; }
     uint64_t link_version() const { return get_persistent_header_const()->link_version; }
     void set_link_version(uint64_t version) { return get_persistent_header()->link_version = version; }
-    void inc_link_version() const { ++(get_persistent_header()->link_version); }
+    void inc_link_version() { ++(get_persistent_header()->link_version); }
 
     void set_valid_node(bool valid) { get_persistent_header()->valid_node = (valid ? 1 : 0); }
     bool is_valid_node() const { return get_persistent_header_const()->valid_node; }
 
-    BtreeLinkInfo link_info() const { return BtreeNodeInfo{node_id(), link_version()}; }
+    BtreeLinkInfo link_info() const { return BtreeLinkInfo{node_id(), link_version()}; }
 
     uint32_t occupied_size(const BtreeConfig& cfg) const { return (cfg.node_data_size() - available_size(cfg)); }
     bool is_merge_needed(const BtreeConfig& cfg) const {
@@ -589,6 +587,16 @@ public:
 
     bnodeid_t edge_id() const { return get_persistent_header_const()->edge_entry; }
     void set_edge_id(bnodeid_t edge) { get_persistent_header()->edge_entry = edge; }
+
+    BtreeLinkInfo edge_info() const {
+        return BtreeLinkInfo{get_persistent_header_const()->edge_entry,
+                             get_persistent_header_const()->edge_link_version};
+    }
+
+    void set_edge_info(const BtreeLinkInfo& info) {
+        get_persistent_header()->edge_entry = info.bnode_id();
+        get_persistent_header()->edge_link_version = info.link_version();
+    }
 
     bool has_valid_edge() const {
         if (is_leaf()) { return false; }

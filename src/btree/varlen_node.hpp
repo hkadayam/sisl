@@ -242,7 +242,7 @@ public:
 
         if (!this->is_leaf() && (other.total_entries() != 0)) {
             // Incase this node is an edge node, move the stick to the right hand side node
-            other.set_edge_id(this->edge_id());
+            other.set_edge_info(this->edge_info());
             this->invalidate_edge();
         }
         remove(full_move ? 0u : ind + 1, start_ind); // Remove all entries in bulk
@@ -286,7 +286,7 @@ public:
 
         if (!this->is_leaf() && (other.total_entries() != 0)) {
             // Incase this node is an edge node, move the stick to the right hand side node
-            other.set_edge_id(this->edge_id());
+            other.set_edge_info(this->edge_info());
             this->invalidate_edge();
         }
 
@@ -336,7 +336,7 @@ public:
 
         // If we copied everything from start_idx till end and if its an edge node, need to copy the edge id as well.
         if (other.has_valid_edge() && ((start_idx + n) == other.total_entries())) {
-            this->set_edge_id(other.edge_id());
+            this->set_edge_info(other.edge_info());
         }
         return n;
     }
@@ -361,7 +361,7 @@ public:
 
         // If we copied everything from start_idx till end and if its an edge node, need to copy the edge id as well.
         if (other.has_valid_edge() && ((start_idx + n) == other.total_entries())) {
-            this->set_edge_id(other.edge_id());
+            this->set_edge_info(other.edge_info());
         }
         return n;
     }

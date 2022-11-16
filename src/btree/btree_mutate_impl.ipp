@@ -5,7 +5,7 @@ namespace sisl {
 namespace btree {
 
 template < typename K >
-static bool is_repair_needed(const BtreeNodePtr< K >& child_node, BtreeLinkInfo& child_info) {
+static bool is_repair_needed(const BtreeNodePtr< K >& child_node, const BtreeLinkInfo& child_info) {
     return child_info.link_version() != child_node->link_version();
 }
 
@@ -381,10 +381,10 @@ btree_status_t Btree< K, V >::check_split_root(ReqT& req) {
     BtreeNodePtr< K > new_root;
 
     m_btree_lock.lock();
-    ret = read_and_lock_node(m_root_node_info->node_id(), root, locktype_t::WRITE, locktype_t::WRITE, req.m_op_context);
+    ret = read_and_lock_node(m_root_node_info.bnode_id(), root, locktype_t::WRITE, locktype_t::WRITE, req.m_op_context);
     if (ret != btree_status_t::success) { goto done; }
 
-    if (!is_split_needed(root, m_bt_cfg, req)) {
+    if (!is_split_needed(root, m_bt_cfg, req) && !is_repair_needed(root, m_root_node_info)) {
         unlock_node(root, locktype_t::WRITE);
         goto done;
     }
@@ -401,14 +401,18 @@ btree_status_t Btree< K, V >::check_split_root(ReqT& req) {
     root = std::move(new_root);
     BT_NODE_DBG_ASSERT_EQ(root->total_entries(), 0, root);
 
-    ret = split_node(root, child_node, root->total_entries(), &split_key, req.m_op_context);
+    if (is_repair_needed(child_node, m_root_node_info)) {
+        ret = repair_split(root, child_node, root->total_entries(), req.m_op_context);
+    } else {
+        ret = split_node(root, child_node, root->total_entries(), &split_key, req.m_op_context);
+    }
+
     if (ret != btree_status_t::success) {
         free_node(root, locktype_t::WRITE, req.m_op_context);
         root = std::move(child_node);
         unlock_node(root, locktype_t::WRITE);
     } else {
         root->set_edge_value(BtreeLinkInfo{child_node->node_id(), child_node->link_version()});
-
         m_root_node_info = BtreeLinkInfo{root->node_id(), root->link_version()};
         unlock_node(child_node, locktype_t::WRITE);
         COUNTER_INCREMENT(m_metrics, btree_depth, 1);
@@ -457,7 +461,6 @@ btree_status_t Btree< K, V >::split_node(const BtreeNodePtr< K >& parent_node, c
     }
 
     child_node1->inc_link_version();
-    child_node2->set_link_version(child_node1->link_version());
 
     // Update the existing parent node entry to point to second child ptr.
     parent_node->update(parent_ind, child_node2->link_info());
@@ -518,7 +521,7 @@ bool Btree< K, V >::is_split_needed(const BtreeNodePtr< K >& node, const BtreeCo
 template < typename K, typename V >
 btree_status_t Btree< K, V >::repair_split(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node1,
                                            uint32_t parent_split_idx, void* context) {
-    parent_node->update(parent_split_idx, BtreeNodeInfo{child_node1->get_next_bnode(), child_node1->link_version()});
+    parent_node->update(parent_split_idx, BtreeLinkInfo{child_node1->next_bnode(), child_node1->link_version()});
     parent_node->insert(parent_split_idx, child_node1->get_last_key(), child_node1->link_info());
     return write_node(parent_node, context);
 }

@@ -230,7 +230,7 @@ btree_status_t sweep_query(BtreeQueryRequest< K >& qreq, std::vector< std::pair<
     BtreeNodePtr< K > root;
     btree_status_t ret = btree_status_t::success;
 
-    ret = read_and_lock_node(m_root_node_id, root, locktype_t::READ, locktype_t::READ, nullptr);
+    ret = read_and_lock_node(m_root_node_info.bnode_id(), root, locktype_t::READ, locktype_t::READ, nullptr);
     if (ret != btree_status_t::success) { goto out; }
 
     ret = do_sweep_query(root, qreq, out_values);
@@ -255,7 +255,7 @@ btree_status_t serializable_query(BtreeSerializableQueryRequest& qreq, std::vect
         qreq.cursor().m_locked_nodes = std::make_unique< BtreeLockTrackerImpl >(this);
 
         BtreeNodePtr< K > root;
-        ret = read_and_lock_node(m_root_node_id, root, locktype_t::READ, locktype_t::READ, nullptr);
+        ret = read_and_lock_node(m_root_node_info.bnode_id(), root, locktype_t::READ, locktype_t::READ, nullptr);
         if (ret != btree_status_t::success) { goto out; }
         get_tracker(qreq)->push(root); // Start tracking the locked nodes.
     } else {
