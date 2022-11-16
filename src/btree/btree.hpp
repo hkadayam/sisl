@@ -10,6 +10,8 @@
 #include <array>
 
 #include <boost/intrusive_ptr.hpp>
+#include <folly/small_vector.h>
+
 #include "btree_internal.hpp"
 #include "btree_req.hpp"
 #include "btree_kv.hpp"
@@ -32,9 +34,6 @@ public:
 
 template < typename K >
 using BtreeNodePtr = boost::intrusive_ptr< sisl::btree::BtreeNode< K > >;
-
-template < typename K >
-using write_node_info_t = std::pair< BtreeNodePtr< K >&, btree_node_write_type >;
 
 template < typename K, typename V >
 struct BtreeThreadVariables {
@@ -110,10 +109,16 @@ protected:
     /////////////////////////// Methods the underlying store is expected to handle ///////////////////////////
     virtual BtreeNodePtr< K > alloc_node(bool is_leaf) = 0;
     virtual BtreeNode< K >* init_node(uint8_t* node_buf, bnodeid_t id, bool init_buf, bool is_leaf);
-    virtual btree_status_t read_node_impl(bnodeid_t id, BtreeNodePtr< K >& bnode) const = 0;
-    virtual btree_status_t write_node_impl(folly::small_vector< write_node_info_t, 5 >&& nodes, void* context) = 0;
-    virtual btree_status_t refresh_node(const BtreeNodePtr< K >& bn, bool is_write_modifiable, void* context) const = 0;
+    virtual btree_status_t read_node_impl(bnodeid_t id, BtreeNodePtr< K >& node) const = 0;
+    virtual btree_status_t write_node_impl(const BtreeNodePtr< K >& node, void* context) = 0;
+    virtual btree_status_t refresh_node(const BtreeNodePtr< K >& node, bool for_read_modify_write,
+                                        void* context) const = 0;
     virtual void free_node_impl(const BtreeNodePtr< K >& node, void* context) = 0;
+    virtual btree_status_t prepare_node_txn(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node,
+                                            void* context) = 0;
+    virtual btree_status_t transact_write_nodes(const folly::small_vector< BtreeNodePtr< K >, 3 >& new_nodes,
+                                                const BtreeNodePtr< K >& child_node,
+                                                const BtreeNodePtr< K >& parent_node, void* context) = 0;
 
     /*virtual void create_tree_precommit(const BtreeNodePtr< K >& root_node, void* op_context) = 0;
      virtual void split_node_precommit(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node1,
@@ -129,15 +134,13 @@ protected:
     /////////////////////////// Methods the application use case is expected to handle ///////////////////////////
 
 protected:
-    std::pair< btree_status_t, bnodeid_t > create_root_node(void* op_context);
+    btree_status_t create_root_node(void* op_context);
 
-private:
     /////////////////////////////// Internal Node Management Methods ////////////////////////////////////
     btree_status_t read_and_lock_node(bnodeid_t id, BtreeNodePtr< K >& node_ptr, locktype_t int_lock_type,
                                       locktype_t leaf_lock_type, void* context) const;
     void read_node_or_fail(bnodeid_t id, BtreeNodePtr< K >& node) const;
     btree_status_t write_node(const BtreeNodePtr< K >& node, void* context);
-    btree_status_t write_nodes(folly::small_vector< write_node_info_t, 5 >&& nodes, void* context);
     void free_node(const BtreeNodePtr< K >& node, locktype_t cur_lock, void* context);
     BtreeNodePtr< K > alloc_leaf_node();
     BtreeNodePtr< K > alloc_interior_node();
@@ -197,10 +200,10 @@ private:
     bool is_split_needed(const BtreeNodePtr< K >& node, const BtreeConfig& cfg, ReqT& req) const;
 
     btree_status_t split_node(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node,
-                              uint32_t parent_ind, BtreeKey* out_split_key, bool root_split, void* context);
+                              uint32_t parent_ind, BtreeKey* out_split_key, void* context);
     btree_status_t mutate_extents_in_leaf(const BtreeNodePtr< K >& my_node, BtreeRangePutRequest< K >& rpreq);
-    // btree_status_t get_start_and_end_ind(const BtreeNodePtr< K >& node, BtreeMutateRequest& req, int& start_ind,
-    //                                      int& end_ind);
+    btree_status_t repair_split(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node1,
+                                uint32_t parent_split_idx, void* context);
 
     ///////// Remove Impl Methods
     template < typename ReqT >
@@ -212,6 +215,8 @@ private:
     btree_status_t merge_nodes(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& leftmost_node,
                                uint32_t start_indx, uint32_t end_indx, void* context);
     bool remove_extents_in_leaf(const BtreeNodePtr< K >& node, BtreeRangeRemoveRequest< K >& rrreq);
+    btree_status_t repair_merge(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& left_child,
+                                uint32_t parent_merge_idx, void* context);
 
     ///////// Query Impl Methods
     btree_status_t do_sweep_query(BtreeNodePtr< K >& my_node, BtreeQueryRequest< K >& qreq,

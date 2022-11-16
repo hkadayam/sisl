@@ -44,22 +44,36 @@ private:
         return BtreeNodePtr< K >{new_node};
     }
 
-    btree_status_t write_node_impl(const BtreeNodePtr< K >& bn, const BtreeNodePtr< K >& dependent_bn, void* context) {
+    btree_status_t write_node_impl(const BtreeNodePtr< K >& bn, void* context) { return btree_status_t::success; }
+
+    btree_status_t read_node_impl(bnodeid_t id, BtreeNodePtr< K >& node) const override {
+        node = BtreeNodePtr< K >{r_cast< BtreeNode< K >* >(id)};
         return btree_status_t::success;
     }
 
-    btree_status_t read_node_impl(bnodeid_t id, BtreeNodePtr< K >& bnode) const override {
-        bnode = BtreeNodePtr< K >{r_cast< BtreeNode< K >* >(id)};
-        return btree_status_t::success;
-    }
-
-    btree_status_t refresh_node(const BtreeNodePtr< K >& bn, bool is_write_modifiable, void* context) const override {
+    btree_status_t refresh_node(const BtreeNodePtr< K >& bn, bool for_read_modify_write, void* context) const override {
         return btree_status_t::success;
     }
 
     void free_node_impl(const BtreeNodePtr< K >& node, void* context) override {}
 
-    void create_tree_precommit(const BtreeNodePtr< K >& root_node, void* op_context) override {}
+    btree_status_t prepare_node_txn(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node,
+                                    void* context) override {
+        return btree_status_t::success;
+    }
+
+    btree_status_t transact_write_nodes(const folly::small_vector< BtreeNodePtr< K >, 3 >& new_nodes,
+                                        const BtreeNodePtr< K >& child_node, const BtreeNodePtr< K >& parent_node,
+                                        void* context) override {
+        for (const auto& node : new_nodes) {
+            this->write_node(node, context);
+        }
+        this->write_node(child_node, context);
+        this->write_node(parent_node, context);
+        return btree_status_t::success;
+    }
+
+    /*void create_tree_precommit(const BtreeNodePtr< K >& root_node, void* op_context) override {}
     void split_node_precommit(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node1,
                               const BtreeNodePtr< K >& child_node2, bool root_split, bool edge_split,
                               void* context) override {}
@@ -68,6 +82,7 @@ private:
                               const BtreeNodePtr< K >& child_node1,
                               const std::vector< BtreeNodePtr< K > >* old_child_nodes,
                               const std::vector< BtreeNodePtr< K > >* replace_child_nodes, void* op_context) override {}
+  */
 #if 0
     static void ref_node(MemBtreeNode* bn) {
         auto mbh = (mem_btree_node_header*)bn;

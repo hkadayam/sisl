@@ -10,21 +10,19 @@ namespace btree {
 #define lock_node(a, b, c) _lock_node(a, b, c, __FILE__, __LINE__)
 
 template < typename K, typename V >
-std::pair< btree_status_t, bnodeid_t > Btree< K, V >::create_root_node(void* op_context) {
+btree_status_t Btree< K, V >::create_root_node(void* op_context) {
     // Assign one node as root node and also create a child leaf node and set it as edge
     BtreeNodePtr< K > root = alloc_leaf_node();
-    if (root == nullptr) { return std::make_pair(btree_status_t::space_not_avail, empty_bnodeid); }
+    if (root == nullptr) { return btree_status_t::space_not_avail; }
 
-    auto ret = write_node(root, nullptr, op_context);
+    auto ret = write_node(root, op_context);
     if (ret != btree_status_t::success) {
         free_node(root, locktype_t::NONE, op_context);
-        return std::make_pair(btree_status_t::space_not_avail, empty_bnodeid);
+        return btree_status_t::space_not_avail;
     }
-    m_root_node_id = root->node_id();
-    create_tree_precommit(root, op_context);
 
-    // write an entry to the journal also
-    return std::make_pair(ret, m_root_node_id);
+    m_root_node_info = BtreeLinkInfo{root->node_id(), root->link_version()};
+    return ret;
 }
 
 /*
@@ -73,19 +71,7 @@ btree_status_t Btree< K, V >::write_node(const BtreeNodePtr< K >& node, void* co
     HISTOGRAM_OBSERVE_IF_ELSE(m_metrics, node->is_leaf(), btree_leaf_node_occupancy, btree_int_node_occupancy,
                               ((m_node_size - node->available_size(m_bt_cfg)) * 100) / m_node_size);
 
-    return (write_node_impl({node, btree_node_write_type::inplace_leaf}, context));
-}
-
-template < typename K, typename V >
-btree_status_t
-Btree< K, V >::write_nodes(folly::small_vector< std::pair< BtreeNodePtr< K >, btree_node_write_type > >&& nodes,
-                           void* context) {
-    for (auto& [node, type] : nodes) {
-        COUNTER_INCREMENT_IF_ELSE(m_metrics, node->is_leaf(), btree_leaf_node_writes, btree_int_node_writes, 1);
-        HISTOGRAM_OBSERVE_IF_ELSE(m_metrics, node->is_leaf(), btree_leaf_node_occupancy, btree_int_node_occupancy,
-                                  ((m_node_size - node->available_size(m_bt_cfg)) * 100) / m_node_size);
-    }
-    return (write_node_impl(std::move(nodes), context));
+    return (write_node_impl(node, context));
 }
 
 /* Caller of this api doesn't expect read to fail in any circumstance */
@@ -140,7 +126,7 @@ btree_status_t Btree< K, V >::upgrade_node_locks(const BtreeNodePtr< K >& parent
         return btree_status_t::retry;
     }
 
-    auto ret = prepare_node_txn(parent_node, child_node, context);
+    ret = prepare_node_txn(parent_node, child_node, context);
     if (ret != btree_status_t::success) {
         unlock_node(child_node, locktype_t::WRITE);
         unlock_node(parent_node, locktype_t::WRITE);

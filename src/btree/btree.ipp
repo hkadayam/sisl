@@ -49,8 +49,7 @@ Btree< K, V >::~Btree() = default;
 
 template < typename K, typename V >
 btree_status_t Btree< K, V >::init(void* op_context) {
-    const auto ret = create_root_node(op_context);
-    return ret.first;
+    return create_root_node(op_context);
 }
 
 template < typename K, typename V >
@@ -65,10 +64,10 @@ std::pair< btree_status_t, uint64_t > Btree< K, V >::destroy_btree(void* context
     }
     ret = do_destroy(n_freed_nodes, context);
     if (ret == btree_status_t::success) {
-        BT_LOG(DEBUG, "btree(root: {}) {} nodes destroyed successfully", m_root_node_id, n_freed_nodes);
+        BT_LOG(DEBUG, "btree(root: {}) {} nodes destroyed successfully", m_root_node_info.bnode_id(), n_freed_nodes);
     } else {
         m_destroyed = false;
-        BT_LOG(ERROR, "btree(root: {}) nodes destroyed failed, ret: {}", m_root_node_id, ret);
+        BT_LOG(ERROR, "btree(root: {}) nodes destroyed failed, ret: {}", m_root_node_info.bnode_id(), ret);
     }
 
     return std::make_pair(ret, n_freed_nodes);
@@ -94,7 +93,7 @@ retry:
     BT_LOG_ASSERT_EQ(bt_thread_vars()->wr_locked_nodes.size(), 0);
 
     BtreeNodePtr< K > root;
-    ret = read_and_lock_node(m_root_node_id, root, acq_lock, acq_lock, put_req.m_op_context);
+    ret = read_and_lock_node(m_root_node_info.bnode_id(), root, acq_lock, acq_lock, put_req.m_op_context);
     if (ret != btree_status_t::success) { goto out; }
     is_leaf = root->is_leaf();
 
@@ -156,7 +155,7 @@ btree_status_t Btree< K, V >::get(ReqT& greq) const {
     m_btree_lock.lock_shared();
     BtreeNodePtr< K > root;
 
-    ret = read_and_lock_node(m_root_node_id, root, locktype_t::READ, locktype_t::READ, greq.m_op_context);
+    ret = read_and_lock_node(m_root_node_info.bnode_id(), root, locktype_t::READ, locktype_t::READ, greq.m_op_context);
     if (ret != btree_status_t::success) { goto out; }
 
     ret = do_get(root, greq);
@@ -183,7 +182,7 @@ btree_status_t Btree< K, V >::remove(ReqT& req) {
 retry:
     btree_status_t ret = btree_status_t::success;
     BtreeNodePtr< K > root;
-    ret = read_and_lock_node(m_root_node_id, root, acq_lock, acq_lock, req.m_op_context);
+    ret = read_and_lock_node(m_root_node_info.bnode_id(), root, acq_lock, acq_lock, req.m_op_context);
     if (ret != btree_status_t::success) { goto out; }
 
     if (root->total_entries() == 0) {
@@ -238,7 +237,7 @@ btree_status_t Btree< K, V >::query(BtreeQueryRequest< K >& qreq, std::vector< s
 
     m_btree_lock.lock_shared();
     BtreeNodePtr< K > root = nullptr;
-    ret = read_and_lock_node(m_root_node_id, root, locktype_t::READ, locktype_t::READ, qreq.m_op_context);
+    ret = read_and_lock_node(m_root_node_info.bnode_id(), root, locktype_t::READ, locktype_t::READ, qreq.m_op_context);
     if (ret != btree_status_t::success) { goto out; }
 
     switch (qreq.query_type()) {
@@ -294,7 +293,7 @@ out:
 template < typename K, typename V >
 bool Btree< K, V >::verify_tree(bool update_debug_bm) const {
     m_btree_lock.lock_shared();
-    bool ret = verify_node(m_root_node_id, nullptr, -1, update_debug_bm);
+    bool ret = verify_node(m_root_node_info.bnode_id(), nullptr, -1, update_debug_bm);
     m_btree_lock.unlock_shared();
 
     return ret;
@@ -318,7 +317,7 @@ template < typename K, typename V >
 void Btree< K, V >::print_tree() const {
     std::string buf;
     m_btree_lock.lock_shared();
-    to_string(m_root_node_id, buf);
+    to_string(m_root_node_info.bnode_id(), buf);
     m_btree_lock.unlock_shared();
 
     BT_LOG(INFO, "Pre order traversal of tree:\n<{}>", buf);

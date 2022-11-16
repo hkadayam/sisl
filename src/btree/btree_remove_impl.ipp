@@ -42,7 +42,7 @@ btree_status_t Btree< K, V >::do_remove(const BtreeNodePtr< K >& my_node, lockty
         my_node->validate_key_order();
 #endif
         if (modified) {
-            write_node(my_node, nullptr, req.m_op_context);
+            write_node(my_node, req.m_op_context);
             COUNTER_DECREMENT(m_metrics, btree_obj_count, removed_count);
         }
 
@@ -84,7 +84,7 @@ retry:
 
         // Check if child node is minimal.
         child_cur_lock = child_node->is_leaf() ? locktype_t::WRITE : locktype_t::READ;
-        if (child_node->is_merge_needed(m_bt_cfg)) {
+        if (child_node->is_merge_needed(m_bt_cfg) || is_repair_needed(child_node, child_info)) {
             uint32_t node_end_idx = my_node->total_entries();
             if (!my_node->has_valid_edge()) { --node_end_idx; }
             if (node_end_idx > (curr_idx + m_bt_cfg.m_max_merge_nodes)) {
@@ -97,14 +97,19 @@ retry:
                 if (ret != btree_status_t::success) { return ret; }
                 curlock = locktype_t::WRITE;
 
-                auto result = merge_nodes(my_node, child_node, curr_idx, node_end_idx, req.m_op_context);
-                if (result != btree_status_t::success && result != btree_status_t::merge_not_required) {
+                if (is_repair_needed(child_node, child_info)) {
+                    ret = repair_merge(my_node, child_node, curr_idx, req.m_op_context);
+                } else {
+                    ret = merge_nodes(my_node, child_node, curr_idx, node_end_idx, req.m_op_context);
+                }
+
+                if ((ret != btree_status_t::success) && (ret != btree_status_t::merge_not_required)) {
                     unlock_node(child_node, locktype_t::WRITE);
                     unlock_node(my_node, locktype_t::WRITE);
                     return ret;
                 }
 
-                if (result == btree_status_t::success) {
+                if (ret == btree_status_t::success) {
                     unlock_node(child_node, locktype_t::WRITE);
                     child_cur_lock = locktype_t::NONE;
                     COUNTER_INCREMENT(m_metrics, btree_merge_count, 1);
@@ -251,10 +256,11 @@ btree_status_t Btree< K, V >::check_collapse_root(ReqT& req) {
     btree_status_t ret = btree_status_t::success;
 
     m_btree_lock.lock();
-    ret = read_and_lock_node(m_root_node_id, root, locktype_t::WRITE, locktype_t::WRITE, req.m_op_context);
+    ret = read_and_lock_node(m_root_node_info.bnode_id(), root, locktype_t::WRITE, locktype_t::WRITE, req.m_op_context);
     if (ret != btree_status_t::success) { goto done; }
 
-    if (root->total_entries() != 0 || root->is_leaf()) { // some other thread collapsed root already
+    if (root->total_entries() != 0 || root->is_leaf()) {
+        // some other thread collapsed root already
         unlock_node(root, locktype_t::WRITE);
         goto done;
     }
@@ -267,7 +273,7 @@ btree_status_t Btree< K, V >::check_collapse_root(ReqT& req) {
     }
 
     free_node(root, locktype_t::WRITE, req.m_op_context);
-    m_root_node_id = child->node_id();
+    m_root_node_info = child->link_info();
     unlock_node(child, locktype_t::WRITE);
 
     // TODO: Have a precommit code here to notify the change in root node id
@@ -282,8 +288,8 @@ template < typename K, typename V >
 btree_status_t Btree< K, V >::merge_nodes(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& leftmost_node,
                                           uint32_t start_idx, uint32_t end_idx, void* context) {
     btree_status_t ret{btree_status_t::success};
-    std::vector< BtreeNodePtr< K > > old_nodes;
-    std::vector< BtreeNodePtr< K > > new_nodes;
+    folly::small_vector< BtreeNodePtr< K >, 3 > old_nodes;
+    folly::small_vector< BtreeNodePtr< K >, 3 > new_nodes;
     BtreeNodePtr< K > new_node;
     uint32_t total_size{0};
     uint32_t balanced_size{0};
@@ -411,22 +417,18 @@ btree_status_t Btree< K, V >::merge_nodes(const BtreeNodePtr< K >& parent_node, 
         BtreeNodePtr< K > last_new_node = nullptr;
         bnodeid_t next_node_id = old_nodes.back()->next_bnode();
         for (auto it = new_nodes.rbegin(); it != new_nodes.rend(); ++it) {
-            K last_key = (*it)->get_last_key(); // last key in child
             (*it)->set_next_bnode(next_node_id);
-
             auto this_node_id = (*it)->node_id();
-            BtreeLinkInfo ninfo{this_node_id};
-            parent_node->update(parent_idx--, last_key, ninfo);
-            write_node(*it, last_new_node, context);
+            parent_node->update(parent_idx--, (*it)->get_last_key(), BtreeLinkInfo{this_node_id, 0});
             last_new_node = *it;
             next_node_id = this_node_id;
         }
-        parent_node->update(parent_idx--, leftmost_node->get_last_key(), BtreeLinkInfo{leftmost_node->node_id()});
+        leftmost_node->inc_link_version();
+        leftmost_node->set_next_bnode(next_node_id);
+        parent_node->update(parent_idx--, leftmost_node->get_last_key(), leftmost_node->link_info());
         parent_node->remove(start_idx, parent_idx);
 
-        leftmost_node->set_next_bnode(next_node_id);
-        write_node(leftmost_node, last_new_node, context);
-        write_node(parent_node, leftmost_node, context);
+        transact_write_nodes(new_nodes, leftmost_node, parent_node, context);
     }
 
 out:
@@ -449,50 +451,65 @@ out:
 template < typename K, typename V >
 btree_status_t Btree< K, V >::repair_merge(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& left_child,
                                            uint32_t parent_merge_idx, void* context) {
+    btree_status_t ret = btree_status_t::success;
+    uint32_t upto_idx;
+    folly::small_vector< BtreeNodePtr< K >, 3 > old_nodes;
+    folly::small_vector< BtreeNodePtr< K >, 3 > new_nodes;
+    bnodeid_t next_nodeid;
+
     // Get next 2 entries after left child which were merge would have happend, from parent point of view. The 2 entries
     // is an example, but generically it is m_max_merge_nodes - 1 from left child are gathered.
-    std::vector< bnodeid_t > old_child_ids;
     for (auto idx = parent_merge_idx + 1; idx <= parent_merge_idx + m_bt_cfg.m_max_merge_nodes; ++idx) {
-        if (idx < total_entries()) {
-            BtreeLinkInfo ninfo;
-            parent_node->get_nth_value(idx, &ninfo, true);
-            old_child_ids.push_back(ninfo.node_id());
-        } else {
-            if (parent_node->has_valid_edge()) { old_child_ids.push_back(parent_node->edge_id()); }
-            break;
-        }
+        BtreeNodePtr< K > child_node;
+        BtreeLinkInfo child_info;
+        ret = get_child_and_lock_node(parent_node, idx, child_info, child_node, locktype_t::WRITE, locktype_t::WRITE,
+                                      context);
+        if (ret != btree_status_t::success) { goto done; }
+        old_nodes.push_back(std::move(child_node));
     }
 
     // Collect same amount from child perspective
-    std::vector< BtreeNodePtr< K > > new_nodes;
-    auto next_nodeid = left_child->get_next_bnode();
-    BtreeNodePtr< K > prev_node = nullptr;
-    for (auto i = 0; (i < m_bt_cfg.m_max_merge_nodes) && (next_nodeid != empty_bnodeid); ++i) {
+    next_nodeid = left_child->next_bnode();
+    for (uint32_t i{0}; (i < m_bt_cfg.m_max_merge_nodes) && (next_nodeid != empty_bnodeid); ++i) {
         BtreeNodePtr< K > child_node;
         ret = read_and_lock_node(next_nodeid, child_node, locktype_t::READ, locktype_t::READ, context);
         if (ret != btree_status_t::success) { goto done; }
 
-        // Search if this id is in list of old child ids. If so, then this is the point before which the parent has
-        // deviated. So all nodes prior to these are new nodes.
-        /*        while (old_child_ids.size() && (next_nodeid != old_child_ids[0])) {
-                    parent_node->remove(parent_idx);
-                    old_child_ids.erase(old_child_ids.begin());
-                }*/][]
-        auto old_idx = 0;
-        while (old_idx < old_child_ids.size()) {
-            if (next_nodeid == old_child_ids[old_idx]) { break; }
-            ++old_idx;
-        }
-        if (old_idx < old_child_ids.size()) { break; }
-
-        next_nodeid = child_node->get_next_bnode();
+        next_nodeid = child_node->next_bnode();
         new_nodes.push_back(std::move(child_node));
     }
-    BT_NODE_REL_ASSERT_LE(new_nodes.size(), old_child_ids.size(), parent_node);
 
-    parent_node->update(parent_split_idx, child_node1->get_next_bnode());
-    parent_node->insert(parent_split_idx, child_node1->get_last_key(), child_node1->node_id());
-    return write_node(parent_node, context);
+    // Now do a diff between old and new and anything not found from old in new nodes has to be removed.
+    upto_idx = new_nodes.size();
+    for (auto& old_node : old_nodes) {
+        for (uint32_t new_idx{0}; new_idx < new_nodes.size(); ++new_idx) {
+            if (old_node->node_id() == new_nodes[new_idx]->node_id()) {
+                upto_idx = std::min(upto_idx, new_idx);
+                break;
+            }
+        }
+        if (upto_idx < new_nodes.size()) { break; }
+        parent_node->remove(parent_merge_idx + 1);
+    }
+
+    BT_NODE_REL_ASSERT_LE(upto_idx, old_nodes.size(), parent_node);
+    for (uint32_t i{0}; i < upto_idx; ++i) {
+        parent_node->insert(parent_merge_idx + 1 + i, new_nodes[i]->get_last_key(),
+                            BtreeLinkInfo{new_nodes[i]->node_id(), left_child->link_version()});
+    }
+    parent_node->update(parent_merge_idx, left_child->link_info());
+    ret = transact_write_nodes(new_nodes, left_child, parent_node, context);
+
+done:
+    for (auto it = new_nodes.rbegin(); it != new_nodes.rend(); ++it) {
+        unlock_node(*it, locktype_t::READ);
+    }
+
+    for (auto it = old_nodes.rbegin(); it != old_nodes.rend(); ++it) {
+        (ret == btree_status_t::success) ? free_node(*it, locktype_t::WRITE, context)
+                                         : unlock_node(*it, locktype_t::READ);
+    }
+    return ret;
 }
 
 #if 0

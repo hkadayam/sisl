@@ -425,6 +425,7 @@ private:
     bool is_end_inclusive() const { return m_input_range.is_end_inclusive(); }
 };
 
+#pragma pack(1)
 class BtreeLinkInfo : public BtreeValue {
 private:
     bnodeid_t m_bnodeid{empty_bnodeid};
@@ -450,7 +451,6 @@ public:
     uint32_t serialized_size() const override { return sizeof(BtreeLinkInfo); }
     static uint32_t get_fixed_size() { return sizeof(BtreeLinkInfo); }
     std::string to_string() const override { return fmt::format("{}.{}", m_bnodeid, m_link_version); }
-    bool operator==(const BtreeLinkInfo& other) const = default;
 
     void deserialize(const blob& b, bool copy) override {
         DEBUG_ASSERT_EQ(b.size, sizeof(BtreeLinkInfo), "BtreeLinkInfo deserialize received invalid blob");
@@ -459,8 +459,12 @@ public:
         m_link_version = other->m_link_version;
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const BtreeLinkInfo& b) { os << b.to_string() return os; }
+    friend std::ostream& operator<<(std::ostream& os, const BtreeLinkInfo& b) {
+        os << b.to_string();
+        return os;
+    }
 };
+#pragma pack()
 
 } // namespace btree
 } // namespace sisl

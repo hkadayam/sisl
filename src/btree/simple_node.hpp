@@ -125,7 +125,7 @@ public:
 
         // If there is an edgeEntry in this node, it needs to move to move out as well.
         if (!this->is_leaf() && this->has_valid_edge()) {
-            other_node.set_edge_id(this->edge_id());
+            other_node.set_edge_info(this->edge_info());
             this->invalidate_edge();
         }
 
@@ -165,7 +165,7 @@ public:
 
         // If we copied everything from start_idx till end and if its an edge node, need to copy the edge id as well.
         if (other.has_valid_edge() && ((start_idx + nentries) == other.total_entries())) {
-            this->set_edge_id(other.edge_id());
+            this->set_edge_info(other.edge_info());
         }
         return nentries;
     }
@@ -325,8 +325,8 @@ public:
         sisl::blob b = v.serialize();
         if (ind >= this->total_entries()) {
             RELEASE_ASSERT_EQ(this->is_leaf(), false, "setting value outside bounds on leaf node");
-            DEBUG_ASSERT_EQ(b.size, sizeof(bnodeid_t), "Invalid value size being set for non-leaf node");
-            this->set_edge_id(*r_cast< bnodeid_t* >(b.bytes));
+            DEBUG_ASSERT_EQ(b.size, sizeof(BtreeLinkInfo), "Invalid value size being set for non-leaf node");
+            this->set_edge_info(*r_cast< BtreeLinkInfo* >(b.bytes));
         } else {
             uint8_t* entry = this->node_data_area() + (get_nth_obj_size(ind) * ind) + get_obj_key_size(ind);
             std::memcpy(entry, b.bytes, b.size);
