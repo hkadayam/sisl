@@ -88,16 +88,14 @@ retry:
         // If the child and child_info link in the parent mismatch, we need to do btree repair, it might have
         // encountered a crash in-between the split or merge and only partial commit happened.
         if (is_split_needed(child_node, m_bt_cfg, req) || is_repair_needed(child_node, child_info)) {
-            if (curlock != locktype_t::WRITE) {
-                ret = upgrade_node_locks(my_node, child_node, child_cur_lock, req.m_op_context);
-                if (ret != btree_status_t::success) {
-                    BT_NODE_LOG(DEBUG, my_node, "Upgrade of node lock failed, retrying from root");
-                    curlock = locktype_t::NONE; // upgrade_node_lock releases all locks on failure
-                    child_cur_lock = locktype_t::NONE;
-                    goto out;
-                }
-                curlock = locktype_t::WRITE;
+            ret = upgrade_node_locks(my_node, child_node, curlock, child_cur_lock, req.m_op_context);
+            if (ret != btree_status_t::success) {
+                BT_NODE_LOG(DEBUG, my_node, "Upgrade of node lock failed, retrying from root");
+                curlock = locktype_t::NONE; // upgrade_node_lock releases all locks on failure
+                child_cur_lock = locktype_t::NONE;
+                goto out;
             }
+            curlock = child_cur_lock = locktype_t::WRITE;
 
             if (is_repair_needed(child_node, child_info)) {
                 ret = repair_split(my_node, child_node, curr_idx, req.m_op_context);
@@ -412,7 +410,6 @@ btree_status_t Btree< K, V >::check_split_root(ReqT& req) {
         root = std::move(child_node);
         unlock_node(root, locktype_t::WRITE);
     } else {
-        root->set_edge_value(BtreeLinkInfo{child_node->node_id(), child_node->link_version()});
         m_root_node_info = BtreeLinkInfo{root->node_id(), root->link_version()};
         unlock_node(child_node, locktype_t::WRITE);
         COUNTER_INCREMENT(m_metrics, btree_depth, 1);
@@ -470,9 +467,10 @@ btree_status_t Btree< K, V >::split_node(const BtreeNodePtr< K >& parent_node, c
 
     // If key is extent then we always insert the tail portion of the extent key in the parent node
     if (out_split_key->is_extent_key()) {
-        parent_node->insert(((ExtentBtreeKey< K >*)out_split_key)->extract_end(false), child_node1->link_info());
+        parent_node->insert(parent_ind, ((ExtentBtreeKey< K >*)out_split_key)->extract_end(false),
+                            child_node1->link_info());
     } else {
-        parent_node->insert(*out_split_key, child_node1->link_info());
+        parent_node->insert(parent_ind, *out_split_key, child_node1->link_info());
     }
 
     BT_NODE_DBG_ASSERT_GT(child_node2->get_first_key().compare(*out_split_key), 0, child_node2);

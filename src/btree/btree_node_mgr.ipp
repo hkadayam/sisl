@@ -98,15 +98,15 @@ void Btree< K, V >::read_node_or_fail(bnodeid_t id, BtreeNodePtr< K >& node) con
  */
 template < typename K, typename V >
 btree_status_t Btree< K, V >::upgrade_node_locks(const BtreeNodePtr< K >& parent_node,
-                                                 const BtreeNodePtr< K >& child_node, locktype_t child_cur_lock,
-                                                 void* context) {
+                                                 const BtreeNodePtr< K >& child_node, locktype_t parent_cur_lock,
+                                                 locktype_t child_cur_lock, void* context) {
     btree_status_t ret = btree_status_t::success;
 
     auto const parent_prev_gen = parent_node->node_gen();
     auto const child_prev_gen = child_node->node_gen();
 
     unlock_node(child_node, child_cur_lock);
-    unlock_node(parent_node, locktype_t::READ);
+    unlock_node(parent_node, parent_cur_lock);
 
     ret = lock_node(parent_node, locktype_t::WRITE, context);
     if (ret != btree_status_t::success) { return ret; }
@@ -199,6 +199,7 @@ btree_status_t Btree< K, V >::_lock_node(const BtreeNodePtr< K >& node, locktype
     auto ret = refresh_node(node, (type == locktype_t::WRITE), context);
     if (ret != btree_status_t::success) {
         node->unlock(type);
+        end_of_lock(node, type);
         return ret;
     }
 

@@ -88,6 +88,7 @@ public:
         return sisl::blob{uintptr_cast(const_cast< uint32_t* >(&m_key)), uint32_cast(sizeof(uint32_t))};
     }
     uint32_t serialized_size() const override { return get_fixed_size(); }
+    static bool is_fixed_size() { return true; }
     static uint32_t get_fixed_size() { return (sizeof(uint32_t)); }
     std::string to_string() const { return fmt::format("{}", m_key); }
 
@@ -153,7 +154,7 @@ public:
     }
 
     uint32_t serialized_size() const override { return idx_to_key(m_key)->size(); }
-
+    static bool is_fixed_size() { return false; }
     static uint32_t get_fixed_size() {
         assert(0);
         return 0;

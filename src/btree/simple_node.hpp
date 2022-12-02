@@ -64,7 +64,12 @@ public:
     }
 
     void update(uint32_t ind, const BtreeKey& key, const BtreeValue& val) override {
-        set_nth_obj(ind, key, val);
+        if (ind == this->total_entries()) {
+            DEBUG_ASSERT_EQ(this->is_leaf(), false);
+            this->set_edge_value(val);
+        } else {
+            set_nth_obj(ind, key, val);
+        }
         this->inc_gen();
     }
 
@@ -239,11 +244,13 @@ public:
     }*/
 
     std::string to_string(bool print_friendly = false) const override {
-        auto str = fmt::format("{}id={} nEntries={} {} ",
+        auto str = fmt::format("{}id={} nEntries={} {} next_node={} ",
                                (print_friendly ? "------------------------------------------------------------\n" : ""),
-                               this->node_id(), this->total_entries(), (this->is_leaf() ? "LEAF" : "INTERIOR"));
+                               this->node_id(), this->total_entries(), (this->is_leaf() ? "LEAF" : "INTERIOR"),
+                               this->next_bnode());
         if (!this->is_leaf() && (this->has_valid_edge())) {
-            fmt::format_to(std::back_inserter(str), "edge_id={} ", this->edge_id());
+            fmt::format_to(std::back_inserter(str), "edge_id={}.{}", this->edge_info().m_bnodeid,
+                           this->edge_info().m_link_version);
         }
 
         for (uint32_t i{0}; i < this->total_entries(); ++i) {
@@ -325,8 +332,9 @@ public:
         sisl::blob b = v.serialize();
         if (ind >= this->total_entries()) {
             RELEASE_ASSERT_EQ(this->is_leaf(), false, "setting value outside bounds on leaf node");
-            DEBUG_ASSERT_EQ(b.size, sizeof(BtreeLinkInfo), "Invalid value size being set for non-leaf node");
-            this->set_edge_info(*r_cast< BtreeLinkInfo* >(b.bytes));
+            DEBUG_ASSERT_EQ(b.size, sizeof(BtreeLinkInfo::bnode_link_info),
+                            "Invalid value size being set for non-leaf node");
+            this->set_edge_info(*r_cast< BtreeLinkInfo::bnode_link_info* >(b.bytes));
         } else {
             uint8_t* entry = this->node_data_area() + (get_nth_obj_size(ind) * ind) + get_obj_key_size(ind);
             std::memcpy(entry, b.bytes, b.size);

@@ -205,6 +205,7 @@ retry:
         }
 
         // We must have gotten a new root, need to start from scratch.
+        m_btree_lock.lock_shared();
         goto retry;
     } else if (root->is_leaf() && (acq_lock != locktype_t::WRITE)) {
         // Root is a leaf, need to take write lock, instead of read, retry

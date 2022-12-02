@@ -123,35 +123,32 @@ public:
         }
 
         // Determine if we are doing same size update or smaller size update, in that case, reuse the space.
-        uint16_t nth_key_len = get_nth_key_len(ind);
-        uint16_t new_obj_size = nth_key_len + val.serialized_size();
+        uint16_t new_obj_size = key.serialized_size() + val.serialized_size();
         uint16_t cur_obj_size = get_nth_obj_size(ind);
 
         if (cur_obj_size >= new_obj_size) {
-            uint8_t* val_ptr = (uint8_t*)get_nth_obj(ind) + nth_key_len;
+            uint8_t* key_ptr = (uint8_t*)get_nth_obj(ind);
+            uint8_t* val_ptr = key_ptr + key.serialized_size();
+            sisl::blob kblob = key.serialize();
             sisl::blob vblob = val.serialize();
+
+            DEBUG_ASSERT_EQ(kblob.size, key.serialized_size(),
+                            "Key Serialized size returned different after serialization");
             DEBUG_ASSERT_EQ(vblob.size, val.serialized_size(),
-                            "Serialized size returned different after serialization");
+                            "Value Serialized size returned different after serialization");
 
             // we can avoid memcpy if addresses of val_ptr and vblob.bytes is same. In place update
-            if (val_ptr != vblob.bytes) {
-                // TODO - we can reclaim space if new obj size is lower than cur obj size
-                // Same or smaller size update, just copy the value blob
-                LOGTRACEMOD(btree, "Not an in-place update, have to copying data of size {}", vblob.size);
-                memcpy(val_ptr, vblob.bytes, vblob.size);
-            } else {
-                // do nothing
-                LOGTRACEMOD(btree, "In place update, not copying data.");
-            }
+            if (key_ptr != kblob.bytes) { std::memcpy(key_ptr, kblob.bytes, kblob.size); }
+            if (val_ptr != vblob.bytes) { std::memcpy(val_ptr, vblob.bytes, vblob.size); }
+            set_nth_key_len(get_nth_record_mutable(ind), kblob.size);
             set_nth_value_len(get_nth_record_mutable(ind), vblob.size);
             get_var_node_header()->m_available_space += cur_obj_size - new_obj_size;
             this->inc_gen();
-            return;
+        } else {
+            remove(ind, ind);
+            insert(ind, key, val);
+            LOGTRACEMOD(btree, "Size changed for either key or value. Had to delete and insert :{}", to_string());
         }
-
-        remove(ind, ind);
-        insert(ind, key, val);
-        LOGTRACEMOD(btree, "Size changed for either key or value. Had to delete and insert :{}", to_string());
     }
 
     // ind_s and ind_e are inclusive
@@ -346,6 +343,7 @@ public:
         auto& other = static_cast< const VariableNode& >(o);
         auto this_gen = this->node_gen();
 
+        nentries = std::min(nentries, other.total_entries() - start_idx);
         auto idx = start_idx;
         uint32_t n = 0;
         while (n < nentries) {
@@ -500,12 +498,13 @@ public:
 
     std::string to_string(bool print_friendly = false) const override {
         auto str = fmt::format(
-            "{}id={} nEntries={} {} free_space={} ",
+            "{}id={} nEntries={} {} free_space={} next_node={} ",
             (print_friendly ? "---------------------------------------------------------------------\n" : ""),
             this->node_id(), this->total_entries(), (this->is_leaf() ? "LEAF" : "INTERIOR"),
-            get_var_node_header_const()->m_available_space);
+            get_var_node_header_const()->m_available_space, this->next_bnode());
         if (!this->is_leaf() && (this->has_valid_edge())) {
-            fmt::format_to(std::back_inserter(str), "edge_id={} ", this->edge_id());
+            fmt::format_to(std::back_inserter(str), "edge_id={}.{}", this->edge_info().m_bnodeid,
+                           this->edge_info().m_link_version);
         }
         for (uint32_t i{0}; i < this->total_entries(); ++i) {
             V val;
@@ -540,8 +539,8 @@ protected:
         // If we don't have enough space in the tail arena area, we need to compact and get the space.
         if (to_insert_size > get_arena_free_space()) {
             compact();
-            assert(to_insert_size <=
-                   get_arena_free_space()); // Expect after compaction to have available space to insert
+            // Expect after compaction to have available space to insert
+            assert(to_insert_size <= get_arena_free_space());
         }
 
         // Create a room for a new record
@@ -573,9 +572,6 @@ protected:
         this->validate_sanity();
 #endif
 
-#ifdef DEBUG
-        // print();
-#endif
         return to_insert_size;
     }
 

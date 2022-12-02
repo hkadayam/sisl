@@ -87,15 +87,15 @@ retry:
         if (child_node->is_merge_needed(m_bt_cfg) || is_repair_needed(child_node, child_info)) {
             uint32_t node_end_idx = my_node->total_entries();
             if (!my_node->has_valid_edge()) { --node_end_idx; }
-            if (node_end_idx > (curr_idx + m_bt_cfg.m_max_merge_nodes)) {
+            if (node_end_idx > (curr_idx + m_bt_cfg.m_max_merge_nodes - 1)) {
                 node_end_idx = curr_idx + m_bt_cfg.m_max_merge_nodes - 1;
             }
 
             if (node_end_idx > curr_idx) {
                 // If we are unable to upgrade the node, ask the caller to retry.
-                ret = upgrade_node_locks(my_node, child_node, child_cur_lock, req.m_op_context);
+                ret = upgrade_node_locks(my_node, child_node, curlock, child_cur_lock, req.m_op_context);
                 if (ret != btree_status_t::success) { return ret; }
-                curlock = locktype_t::WRITE;
+                curlock = child_cur_lock = locktype_t::WRITE;
 
                 if (is_repair_needed(child_node, child_info)) {
                     ret = repair_merge(my_node, child_node, curr_idx, req.m_op_context);
@@ -134,14 +134,16 @@ retry:
         }
 
 #ifndef NDEBUG
-        if (curr_idx != my_node->total_entries() && child_node->total_entries()) { // not edge
-            BT_NODE_DBG_ASSERT_LE(child_node->get_last_key().compare(my_node->get_nth_key(curr_idx, false)), 0,
-                                  my_node);
-        }
+        if (child_node->total_entries()) {
+            if (curr_idx != my_node->total_entries()) { // not edge
+                BT_NODE_DBG_ASSERT_LE(child_node->get_last_key().compare(my_node->get_nth_key(curr_idx, false)), 0,
+                                      my_node);
+            }
 
-        if (curr_idx > 0 && child_node->total_entries()) { // not first child
-            BT_NODE_DBG_ASSERT_GT(child_node->get_first_key().compare(my_node->get_nth_key(curr_idx - 1, false)), 0,
-                                  my_node);
+            if (curr_idx > 0) { // not first child
+                BT_NODE_DBG_ASSERT_GT(child_node->get_first_key().compare(my_node->get_nth_key(curr_idx - 1, false)), 0,
+                                      my_node);
+            }
         }
 #endif
 
@@ -401,6 +403,35 @@ btree_status_t Btree< K, V >::merge_nodes(const BtreeNodePtr< K >& parent_node, 
         goto out;
     }
 
+    if (!K::is_fixed_size()) {
+        // Lets see if we have enough room in parent node to accomodate changes. This is needed only if the key is not
+        // fixed length. For fixed length node merge will always result in lesser or equal size
+        int64_t post_merge_size{0};
+        auto& old_node = old_nodes[leftmost_src.ith_nodes.back()];
+        if (old_node->total_entries()) {
+            post_merge_size += old_node->get_nth_obj_size(
+                std::min(leftmost_src.last_node_upto, old_node->total_entries() - 1)); // New leftmost entry
+        }
+        post_merge_size -= parent_node->get_nth_obj_size(start_idx); // Previous left entry
+
+        for (auto& node : new_nodes) {
+            if (node->total_entries()) { post_merge_size += node->get_nth_obj_size(node->total_entries() - 1); }
+        }
+
+        for (auto& node : old_nodes) {
+            if (node->total_entries()) { post_merge_size -= node->get_nth_obj_size(node->total_entries() - 1); }
+        }
+
+        if (post_merge_size > parent_node->available_size(m_bt_cfg)) {
+            BT_NODE_LOG(DEBUG, parent_node,
+                        "Merge is needed, however after merge it will add {} bytes which is more than "
+                        "available_size={}, so not proceeding with merge",
+                        post_merge_size, parent_node->available_size(m_bt_cfg));
+            ret = btree_status_t::merge_not_required;
+            goto out;
+        }
+    }
+
     // Now it is time to commit things and at this point no going back, since in-place write nodes are modified
     {
         for (uint32_t i{0}; i < leftmost_src.ith_nodes.size(); ++i) {
@@ -410,23 +441,78 @@ btree_status_t Btree< K, V >::merge_nodes(const BtreeNodePtr< K >& parent_node, 
                                                ? leftmost_src.last_node_upto
                                                : std::numeric_limits< uint32_t >::max());
         }
+        std::string parent_node_step1 = parent_node->to_string();
 
-        // Update the parent node from right to left and remove anything that is excess. While iterating
-        // write the nodes with appropriate dependencies
-        auto parent_idx = end_idx;
+        // First remove the excess entries between new nodes and old nodes
+        auto excess = old_nodes.size() - new_nodes.size();
+        if (excess) {
+            parent_node->remove(start_idx + 1, start_idx + excess);
+            end_idx -= excess;
+        }
+
+        std::string parent_node_step2 = parent_node->to_string();
+
+        // Update all the new node entries to parent and while iterating update their node links
+        auto cur_idx = end_idx;
         BtreeNodePtr< K > last_new_node = nullptr;
         bnodeid_t next_node_id = old_nodes.back()->next_bnode();
         for (auto it = new_nodes.rbegin(); it != new_nodes.rend(); ++it) {
             (*it)->set_next_bnode(next_node_id);
             auto this_node_id = (*it)->node_id();
-            parent_node->update(parent_idx--, (*it)->get_last_key(), BtreeLinkInfo{this_node_id, 0});
+            parent_node->update(cur_idx--, (*it)->get_last_key(), BtreeLinkInfo{this_node_id, 0});
+            last_new_node = *it;
+            next_node_id = this_node_id;
+        }
+
+        std::string parent_node_step3 = parent_node->to_string();
+
+        // Finally update the leftmost node with latest key
+        leftmost_node->inc_link_version();
+        leftmost_node->set_next_bnode(next_node_id);
+        parent_node->update(start_idx, leftmost_node->get_last_key(), leftmost_node->link_info());
+
+#if 0
+        /////////// Old code /////////////
+        // Update the parent node from right to left and remove anything that is excess. While iterating
+        // write the nodes with appropriate dependencies
+        auto cur_idx = end_idx;
+        BtreeNodePtr< K > last_new_node = nullptr;
+        bnodeid_t next_node_id = old_nodes.back()->next_bnode();
+        for (auto it = new_nodes.rbegin(); it != new_nodes.rend(); ++it) {
+            (*it)->set_next_bnode(next_node_id);
+            auto this_node_id = (*it)->node_id();
+            parent_node->update(cur_idx--, (*it)->get_last_key(), BtreeLinkInfo{this_node_id, 0});
             last_new_node = *it;
             next_node_id = this_node_id;
         }
         leftmost_node->inc_link_version();
         leftmost_node->set_next_bnode(next_node_id);
-        parent_node->update(parent_idx--, leftmost_node->get_last_key(), leftmost_node->link_info());
-        parent_node->remove(start_idx, parent_idx);
+        std::string parent_node_step2 = parent_node->to_string();
+        if (cur_idx == parent_node->total_entries()) {
+            // We do, update the left node where the merge was started and remove newly added
+        }
+        parent_node->update(cur_idx--, leftmost_node->get_last_key(), leftmost_node->link_info());
+        std::string parent_node_step3 = parent_node->to_string();
+        parent_node->remove(start_idx, cur_idx);
+#endif
+
+#ifndef NDEBUG
+        BT_DBG_ASSERT(!parent_node_step1.empty() && !parent_node_step2.empty() && !parent_node_step3.empty(),
+                      "Empty string");
+        if (leftmost_node->total_entries() && (start_idx < parent_node->total_entries())) {
+            BT_NODE_DBG_ASSERT_LE(leftmost_node->get_last_key().compare(parent_node->get_nth_key(start_idx, false)), 0,
+                                  parent_node);
+        }
+
+        auto idx = start_idx + 1;
+        for (const auto& node : new_nodes) {
+            if (idx == parent_node->total_entries()) { break; }
+            BT_NODE_DBG_ASSERT_GT(node->get_first_key().compare(parent_node->get_nth_key(idx - 1, false)), 0,
+                                  parent_node);
+            BT_NODE_DBG_ASSERT_LE(node->get_last_key().compare(parent_node->get_nth_key(idx, false)), 0, parent_node);
+            ++idx;
+        }
+#endif
 
         transact_write_nodes(new_nodes, leftmost_node, parent_node, context);
     }

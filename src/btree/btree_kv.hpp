@@ -162,50 +162,6 @@ private:
 };
 
 /*
-class BtreeKeyRange {
-public:
-    const BtreeKey* m_input_start_key{nullptr};
-    const BtreeKey* m_input_end_key{nullptr};
-    bool m_start_incl;
-    bool m_end_incl;
-    MultiMatchOption m_multi_selector;
-
-    friend class BtreeTraversalState;
-
-    template < typename K >
-    friend class BtreeKeyRangeSafe;
-
-    BtreeKeyRange(const BtreeKeyRange& other) = default;
-    BtreeKeyRange& operator=(const BtreeKeyRange& other) = default;
-
-    void set_multi_option(MultiMatchOption o) { m_multi_selector = o; }
-    virtual const BtreeKey& start_key() const { return *m_input_start_key; }
-    virtual const BtreeKey& end_key() const { return *m_input_end_key; }
-
-    virtual bool is_start_inclusive() const { return m_start_incl; }
-    virtual bool is_end_inclusive() const { return m_end_incl; }
-    virtual bool is_simple_search() const {
-        return ((m_input_start_key == m_input_end_key) && (m_start_incl == m_end_incl));
-    }
-    MultiMatchOption multi_option() const { return m_multi_selector; }
-
-private:
-    BtreeKeyRange(const BtreeKey* start_key, bool start_incl, const BtreeKey* end_key, bool end_incl,
-                  MultiMatchOption option) :
-            m_input_start_key{start_key},
-            m_input_end_key{end_key},
-            m_start_incl{start_incl},
-            m_end_incl{end_incl},
-            m_multi_selector{option} {}
-    BtreeKeyRange(const BtreeKey* start_key, bool start_incl, MultiMatchOption option) :
-            m_input_start_key{start_key},
-            m_input_end_key{start_key},
-            m_start_incl{start_incl},
-            m_end_incl{start_incl},
-            m_multi_selector{option} {}
-};
-*/
-/*
  * This type is for keys which is range in itself i.e each key is having its own
  * start() and end().
  */
@@ -288,74 +244,6 @@ public:
     virtual bool is_equal_sized() const = 0;
 };
 
-#if 0
-template < typename K >
-class BtreeKeyRangeSafe : public BtreeKeyRange {
-public:
-    K m_actual_start_key;
-    K m_actual_end_key;
-
-public:
-    BtreeKeyRangeSafe(const BtreeKey& start_key) :
-            BtreeKeyRange(nullptr, true, nullptr, true, MultiMatchOption::DO_NOT_CARE), m_actual_start_key{start_key} {
-        this->m_input_start_key = &m_actual_start_key;
-        this->m_input_end_key = &m_actual_start_key;
-    }
-
-    virtual ~BtreeKeyRangeSafe() = default;
-
-    BtreeKeyRangeSafe(const BtreeKey& start_key, const BtreeKey& end_key) :
-            BtreeKeyRangeSafe(start_key, true, end_key, true) {}
-
-    BtreeKeyRangeSafe(const BtreeKey& start_key, bool start_incl, const BtreeKey& end_key, bool end_incl,
-                      MultiMatchOption option = MultiMatchOption::DO_NOT_CARE) :
-            BtreeKeyRange(nullptr, start_incl, nullptr, end_incl, option),
-            m_actual_start_key{start_key},
-            m_actual_end_key{end_key} {
-        this->m_input_start_key = &m_actual_start_key;
-        this->m_input_end_key = &m_actual_end_key;
-    }
-
-    BtreeKeyRangeSafe(const BtreeKeyRange& other) :
-            BtreeKeyRange(nullptr, other.is_start_inclusive(), nullptr, other.is_end_inclusive(),
-                          other.multi_option()) {
-        m_actual_start_key = *other.m_input_start_key;
-        this->m_input_start_key = &m_actual_start_key;
-
-        if (other.m_input_start_key != other.m_input_end_key) {
-            m_actual_end_key = *other.m_input_end_key;
-            this->m_input_end_key = &m_actual_end_key;
-        } else {
-            this->m_input_end_key = &m_actual_start_key;
-        }
-    }
-
-    BtreeKeyRangeSafe& operator=(const BtreeKeyRange& other) {
-        this->m_start_incl = other.m_start_incl;
-        this->m_end_incl = other.m_end_incl;
-        this->m_multi_selector = other.m_multi_selector;
-        m_actual_start_key = *other.m_input_start_key;
-        this->m_input_start_key = &m_actual_start_key;
-
-        if (other.m_input_start_key != other.m_input_end_key) {
-            m_actual_end_key = *other.m_input_end_key;
-            this->m_input_end_key = &m_actual_end_key;
-        } else {
-            this->m_input_end_key = &m_actual_start_key;
-        }
-        return *this;
-    }
-
-    /******************* all functions are constant *************/
-    BtreeKeyRangeSafe< K > start_of_range() const {
-        return BtreeKeyRangeSafe< K >(start_key(), is_start_inclusive(), multi_option());
-    }
-    BtreeKeyRangeSafe< K > end_of_range() const {
-        return BtreeKeyRangeSafe< K >(end_key(), is_end_inclusive(), multi_option());
-    }
-};
-#endif
-
 struct BtreeLockTracker;
 template < typename K >
 struct BtreeQueryCursor {
@@ -425,38 +313,46 @@ private:
     bool is_end_inclusive() const { return m_input_range.is_end_inclusive(); }
 };
 
-#pragma pack(1)
 class BtreeLinkInfo : public BtreeValue {
+public:
+    struct bnode_link_info {
+        bnodeid_t m_bnodeid{empty_bnodeid};
+        uint64_t m_link_version{0}; // Link version between parent and a child
+    };
+
 private:
-    bnodeid_t m_bnodeid{empty_bnodeid};
-    uint64_t m_link_version{0}; // Link version between parent and a child
+    bnode_link_info info;
 
 public:
     BtreeLinkInfo() = default;
-    explicit BtreeLinkInfo(bnodeid_t id, uint64_t v) : m_bnodeid(id), m_link_version{v} {}
+    explicit BtreeLinkInfo(bnodeid_t id, uint64_t v) {
+        info.m_bnodeid = id;
+        info.m_link_version = v;
+    }
+    BtreeLinkInfo(bnode_link_info l) : info{l} {}
     BtreeLinkInfo& operator=(const BtreeLinkInfo& other) = default;
 
-    bnodeid_t bnode_id() const { return m_bnodeid; }
-    uint64_t link_version() const { return m_link_version; }
-    void set_bnode_id(bnodeid_t bid) { m_bnodeid = bid; }
-    void set_link_version(uint64_t v) { m_link_version = v; }
-    bool has_valid_bnode_id() const { return (m_bnodeid != empty_bnodeid); }
+    bnodeid_t bnode_id() const { return info.m_bnodeid; }
+    uint64_t link_version() const { return info.m_link_version; }
+    void set_bnode_id(bnodeid_t bid) { info.m_bnodeid = bid; }
+    void set_link_version(uint64_t v) { info.m_link_version = v; }
+    bool has_valid_bnode_id() const { return (info.m_bnodeid != empty_bnodeid); }
 
     sisl::blob serialize() const override {
         sisl::blob b;
-        b.size = sizeof(BtreeLinkInfo);
-        b.bytes = uintptr_cast(const_cast< BtreeLinkInfo* >(this));
+        b.size = sizeof(bnode_link_info);
+        b.bytes = uintptr_cast(const_cast< bnode_link_info* >(&info));
         return b;
     }
-    uint32_t serialized_size() const override { return sizeof(BtreeLinkInfo); }
-    static uint32_t get_fixed_size() { return sizeof(BtreeLinkInfo); }
-    std::string to_string() const override { return fmt::format("{}.{}", m_bnodeid, m_link_version); }
+    uint32_t serialized_size() const override { return sizeof(bnode_link_info); }
+    static uint32_t get_fixed_size() { return sizeof(bnode_link_info); }
+    std::string to_string() const override { return fmt::format("{}.{}", info.m_bnodeid, info.m_link_version); }
 
     void deserialize(const blob& b, bool copy) override {
-        DEBUG_ASSERT_EQ(b.size, sizeof(BtreeLinkInfo), "BtreeLinkInfo deserialize received invalid blob");
-        BtreeLinkInfo* other = r_cast< BtreeLinkInfo* >(b.bytes);
-        m_bnodeid = other->m_bnodeid;
-        m_link_version = other->m_link_version;
+        DEBUG_ASSERT_EQ(b.size, sizeof(bnode_link_info), "BtreeLinkInfo deserialize received invalid blob");
+        auto other = r_cast< bnode_link_info* >(b.bytes);
+        set_bnode_id(other->m_bnodeid);
+        set_link_version(other->m_link_version);
     }
 
     friend std::ostream& operator<<(std::ostream& os, const BtreeLinkInfo& b) {
@@ -464,7 +360,6 @@ public:
         return os;
     }
 };
-#pragma pack()
 
 } // namespace btree
 } // namespace sisl

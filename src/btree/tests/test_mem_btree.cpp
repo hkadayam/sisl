@@ -37,7 +37,9 @@ SISL_OPTION_GROUP(test_mem_btree,
                   (num_iters, "", "num_iters", "number of iterations for rand ops",
                    ::cxxopts::value< uint32_t >()->default_value("65536"), "number"),
                   (num_entries, "", "num_entries", "number of entries to test with",
-                   ::cxxopts::value< uint32_t >()->default_value("10000"), "number"))
+                   ::cxxopts::value< uint32_t >()->default_value("10000"), "number"),
+                  (seed, "", "seed", "random engine seed, use random if not defined",
+                   ::cxxopts::value< uint64_t >()->default_value("0"), "number"))
 
 struct FixedLenBtreeTest {
     using BtreeType = MemBtree< TestFixedKey, TestFixedValue >;
@@ -117,6 +119,7 @@ struct BtreeTest : public testing::Test {
         static std::uniform_int_distribution< uint32_t > s_randkey_start_generator{1, num_entries};
         auto val = std::make_unique< V >(V::generate_rand());
 
+    retry:
         auto const start_it = m_shadow_map.lower_bound(K{s_randkey_start_generator(g_re)});
         auto end_it = start_it;
         auto it = start_it;
@@ -125,6 +128,7 @@ struct BtreeTest : public testing::Test {
             it->second = *val;
             end_it = it++;
         }
+        if (count == 0) { goto retry; }
 
         auto mreq = BtreeRangePutRequest< K >{BtreeKeyRange< K >{start_it->first, true, end_it->first, true},
                                               btree_put_type::REPLACE_ONLY_IF_EXISTS, std::move(val)};
@@ -347,6 +351,11 @@ int main(int argc, char* argv[]) {
     sisl::logging::SetLogger("test_mem_btree");
     spdlog::set_pattern("[%D %T%z] [%^%L%$] [%t] %v");
 
+    if (SISL_OPTIONS.count("seed")) {
+        auto seed = SISL_OPTIONS["seed"].as< uint64_t >();
+        LOGINFO("Using seed {} to sow the random generation", seed);
+        g_re.seed(seed);
+    }
     auto ret = RUN_ALL_TESTS();
     return ret;
 }
