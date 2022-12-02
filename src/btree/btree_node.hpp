@@ -57,26 +57,25 @@ static constexpr uint8_t BTREE_NODE_MAGIC = 0xab;
 struct persistent_hdr_t {
     uint8_t magic{BTREE_NODE_MAGIC};
     uint8_t version{BTREE_NODE_VERSION};
-    uint16_t checksum;
+    uint16_t checksum{0};
 
-    bnodeid_t node_id;
-    bnodeid_t next_node;
+    bnodeid_t node_id{empty_bnodeid};
+    bnodeid_t next_node{empty_bnodeid};
 
-    uint32_t nentries : 27;
+    uint32_t nentries : 27 {0};
     uint32_t node_type : 3;
-    uint32_t leaf : 1;
-    uint32_t valid_node : 1;
+    uint32_t leaf : 1 {0};
+    uint32_t valid_node : 1 {1};
 
-    uint64_t node_gen{0};                // Generation of this node, incremented on every update
-    uint64_t link_version{0};            // Version of the link between its parent, updated if structure changes
-    bnodeid_t edge_entry{empty_bnodeid}; // Edge entries node id, invalid node if its non-edge
-    uint64_t edge_link_version{0};       // Version of the link between this node and its edge child
+    uint64_t node_gen{0};                     // Generation of this node, incremented on every update
+    uint64_t link_version{0};                 // Version of the link between its parent, updated if structure changes
+    BtreeLinkInfo::bnode_link_info edge_info; // Edge entry information
 
     std::string to_string() const {
         return fmt::format("magic={} version={} csum={} node_id={} next_node={} nentries={} node_type={} is_leaf={} "
-                           "valid_node={} node_gen={} link_version={} edge_entry={}, edge_link_version={}",
+                           "valid_node={} node_gen={} link_version={} edge_nodeid={}, edge_link_version={}",
                            magic, version, checksum, node_id, next_node, nentries, node_type, leaf, valid_node,
-                           node_gen, link_version, edge_entry, edge_link_version);
+                           node_gen, link_version, edge_info.m_bnodeid, edge_info.m_link_version);
     }
 };
 #pragma pack()
@@ -93,13 +92,8 @@ public:
 public:
     BtreeNode(uint8_t* node_buf, bnodeid_t id, bool init_buf, bool is_leaf) : m_phys_node_buf{node_buf} {
         if (init_buf) {
-            set_magic();
-            init_checksum();
+            new (node_buf) persistent_hdr_t{};
             set_leaf(is_leaf);
-            set_total_entries(0);
-            set_next_bnode(empty_bnodeid);
-            set_valid_node(true);
-            set_node_id(id);
         } else {
             DEBUG_ASSERT_EQ(node_id(), id);
             DEBUG_ASSERT_EQ(magic(), BTREE_NODE_MAGIC);
@@ -107,7 +101,7 @@ public:
         }
         m_trans_hdr.is_leaf_node = is_leaf;
     }
-    virtual ~BtreeNode() = default;
+    virtual ~BtreeNode() { ((persistent_hdr_t*)m_phys_node_buf)->~persistent_hdr_t(); }
 
     // Identify if a node is a leaf node or not, from raw buffer, by just reading persistent_hdr_t
     static bool identify_leaf_node(uint8_t* buf) { return (r_cast< persistent_hdr_t* >(buf))->leaf; }
@@ -388,8 +382,8 @@ public:
 
     virtual void set_edge_value(const BtreeValue& v) {
         const auto b = v.serialize();
-        BtreeLinkInfo* l = r_cast< BtreeLinkInfo* >(b.bytes);
-        ASSERT_EQ(b.size, sizeof(BtreeLinkInfo));
+        auto l = r_cast< BtreeLinkInfo::bnode_link_info* >(b.bytes);
+        ASSERT_EQ(b.size, sizeof(BtreeLinkInfo::bnode_link_info));
         set_edge_info(*l);
     }
 
@@ -585,18 +579,11 @@ public:
     bnodeid_t next_bnode() const { return get_persistent_header_const()->next_node; }
     void set_next_bnode(bnodeid_t b) { get_persistent_header()->next_node = b; }
 
-    bnodeid_t edge_id() const { return get_persistent_header_const()->edge_entry; }
-    void set_edge_id(bnodeid_t edge) { get_persistent_header()->edge_entry = edge; }
+    bnodeid_t edge_id() const { return get_persistent_header_const()->edge_info.m_bnodeid; }
+    void set_edge_id(bnodeid_t edge) { get_persistent_header()->edge_info.m_bnodeid = edge; }
 
-    BtreeLinkInfo edge_info() const {
-        return BtreeLinkInfo{get_persistent_header_const()->edge_entry,
-                             get_persistent_header_const()->edge_link_version};
-    }
-
-    void set_edge_info(const BtreeLinkInfo& info) {
-        get_persistent_header()->edge_entry = info.bnode_id();
-        get_persistent_header()->edge_link_version = info.link_version();
-    }
+    BtreeLinkInfo::bnode_link_info edge_info() const { return get_persistent_header_const()->edge_info; }
+    void set_edge_info(const BtreeLinkInfo::bnode_link_info& info) { get_persistent_header()->edge_info = info; }
 
     bool has_valid_edge() const {
         if (is_leaf()) { return false; }

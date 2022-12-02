@@ -149,7 +149,7 @@ protected:
                                            BtreeNodePtr< K >& child_node, locktype_t int_lock_type,
                                            locktype_t leaf_lock_type, void* context) const;
     btree_status_t upgrade_node_locks(const BtreeNodePtr< K >& parent_node, const BtreeNodePtr< K >& child_node,
-                                      locktype_t child_cur_lock, void* context);
+                                      locktype_t parent_cur_lock, locktype_t child_cur_lock, void* context);
     btree_status_t upgrade_node(const BtreeNodePtr< K >& node, locktype_t prev_lock, void* context, uint64_t prev_gen);
     btree_status_t _lock_node(const BtreeNodePtr< K >& node, locktype_t type, void* context, const char* fname,
                               int line) const;
