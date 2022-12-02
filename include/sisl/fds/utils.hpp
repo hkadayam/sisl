@@ -224,6 +224,7 @@ static int spaceship_oper(const T& left, const T& right) {
 
 #define uintptr_cast reinterpret_cast< uint8_t* >
 #define voidptr_cast reinterpret_cast< void* >
+#define charptr_cast reinterpret_cast< char* >
 #define int_cast static_cast< int >
 #define uint32_cast static_cast< uint32_t >
 #define int64_cast static_cast< int64_t >
