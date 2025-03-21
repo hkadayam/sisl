@@ -35,6 +35,8 @@ GrpcBaseClient::GrpcBaseClient(const std::string& server_addr,
 void GrpcBaseClient::init() {
     ::grpc::SslCredentialsOptions ssl_opts;
     ::grpc::ChannelArguments channel_args;
+
+    REGISTER_LOG_MOD(grpc_server)
     channel_args.SetMaxReceiveMessageSize(-1);
 
     REGISTER_LOG_MOD(grpc_server)
