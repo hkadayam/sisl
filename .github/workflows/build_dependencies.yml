@@ -103,7 +103,7 @@ jobs:
       uses: hkadayam/sisl/.github/actions/load_conan@master
       with:
         testing: ${{ inputs.testing }}
-        key_prefix: SislDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        key_prefix: SislForkDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
 
     - name: Setup Conan
       uses: hkadayam/sisl/.github/actions/setup_conan@master
@@ -131,7 +131,7 @@ jobs:
     - name: Save Conan Cache
       uses: hkadayam/sisl/.github/actions/store_conan@master
       with:
-        key_prefix: SislDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        key_prefix: SislForkDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
       if: ${{ github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Create and Test Package

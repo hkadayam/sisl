@@ -1,6 +1,6 @@
 # SymbiosisLib (sisl)
-[![Conan Build](https://github.com/eBay/sisl/actions/workflows/merge_build.yml/badge.svg?branch=master)](https://github.com/eBay/sisl/actions/workflows/merge_build.yml)
-[![CodeCov](https://codecov.io/gh/eBay/sisl/branch/master/graph/badge.svg)](https://codecov.io/gh/eBay/Sisl)
+[![Conan Build](https://github.com/hkadayam/sisl/actions/workflows/merge_build.yml/badge.svg?branch=master)](https://github.com/eBay/hkadayam/actions/workflows/merge_build.yml)
+[![CodeCov](https://codecov.io/gh/hkadayam/sisl/branch/master/graph/badge.svg)](https://codecov.io/gh/hkadayam/Sisl)
 
 This repo provides a symbiosis of libraries (thus named sisl - pronounced like sizzle) mostly for very high performance data 
 structures and utilities. This is mostly on top of folly, boost, STL and other good well known libraries. Thus its not trying 
@@ -86,7 +86,7 @@ $ conan build .
 We welcome contributions. If you find any bugs, potential flaws and edge cases, improvements, new feature suggestions or discussions, please submit issues or pull requests.
 
 Contact
-Harihara Kadayam hkadayam@ebay.com
+Harihara Kadayam harihara.kadayam@gmail.com
 
 ## License Information
 Copyright 2021 eBay Inc.

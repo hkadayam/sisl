@@ -7,7 +7,7 @@ inputs:
   key_prefix:
     description: 'Cache prefix'
     required: true
-    default: 'Deps'
+    default: 'ForkDeps'
   fail_on_cache_miss:
     description: 'Fail if key missing'
     required: false
