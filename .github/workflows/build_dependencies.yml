@@ -94,19 +94,19 @@ jobs:
     - name: Retrieve Recipe
       uses: actions/checkout@main
       with:
-        repository: eBay/sisl
+        repository: hkadayam/sisl
         ref: ${{ inputs.branch }}
       if: ${{ inputs.testing == 'False' }}
 
     - name: Load Conan Cache
       id: restore-cache
-      uses: eBay/sisl/.github/actions/load_conan@master
+      uses: hkadayam/sisl/.github/actions/load_conan@master
       with:
         testing: ${{ inputs.testing }}
         key_prefix: SislDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
 
     - name: Setup Conan
-      uses: eBay/sisl/.github/actions/setup_conan@master
+      uses: hkadayam/sisl/.github/actions/setup_conan@master
       with:
         platform: ${{ inputs.platform }}
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
@@ -129,7 +129,7 @@ jobs:
       if: ${{ steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Save Conan Cache
-      uses: eBay/sisl/.github/actions/store_conan@master
+      uses: hkadayam/sisl/.github/actions/store_conan@master
       with:
         key_prefix: SislDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
       if: ${{ github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
