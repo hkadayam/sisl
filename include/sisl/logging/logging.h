@@ -23,7 +23,6 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
-#include <initializer_list>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -34,14 +33,17 @@
 #include <filesystem>
 
 #include <boost/preprocessor/cat.hpp>
-#include <boost/preprocessor/control/if.hpp>
-#include <boost/preprocessor/seq/for_each.hpp>
 #include <boost/preprocessor/stringize.hpp>
-#include <boost/preprocessor/variadic/to_seq.hpp>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h> // NOTE: There is an ordering dependecy on this header and fmt headers below
 #include <spdlog/fmt/bin_to_hex.h>
 #include <spdlog/fmt/ostr.h>
+
+#ifdef LOG_MODS_V1_LEGACY
+#include <sisl/logging/log_mods_v1.h>
+#else
+#include <sisl/logging/log_mods_v2.h>
+#endif
 
 // The following constexpr's are used to extract the filename
 // from the full path during compile time.
@@ -81,8 +83,6 @@ constexpr const char* file_name(const char* const str) { return str_slant(str) ?
 #define LOGGING_PREDICT_TRUE(x) x
 #endif
 #endif
-
-#define LEVELCHECK(mod, lvl) (module_level_##mod <= (lvl))
 
 #define LINEOUTPUTFORMAT "[{}:{}:{}] "
 #define LINEOUTPUTARGS file_name(__FILE__), __LINE__, __FUNCTION__
@@ -407,19 +407,6 @@ private:
     LoggerThreadContext();
 };
 
-class InitModules {
-public:
-    InitModules(std::initializer_list< const char* > list) { init_modules(list); }
-    InitModules(const InitModules&) = delete;
-    InitModules& operator=(const InitModules&) = delete;
-    InitModules(InitModules&&) noexcept = delete;
-    InitModules& operator=(InitModules&&) noexcept = delete;
-    ~InitModules() = default;
-
-private:
-    void init_modules(std::initializer_list< const char* > mods_list);
-};
-
 #define logger_thread_ctx LoggerThreadContext::instance()
 #define mythread_logger logger_thread_ctx.m_logger
 #define mycritical_logger logger_thread_ctx.m_critical_logger
@@ -430,31 +417,9 @@ private:
 } // namespace logging
 } // namespace sisl
 
-#define MODLEVELDEC(r, _, module)                                                                                      \
-    extern "C" {                                                                                                       \
-    extern spdlog::level::level_enum BOOST_PP_CAT(module_level_, module);                                              \
-    }
-MODLEVELDEC(_, _, base)
-
-#define MODLEVELDEF(r, l, module)                                                                                      \
-    extern "C" {                                                                                                       \
-    __attribute__((visibility("default"))) spdlog::level::level_enum BOOST_PP_CAT(module_level_, module){l};           \
-    }
-
-#define MOD_LEVEL_STRING(r, _, module) BOOST_PP_STRINGIZE(module),
-
-#define SISL_LOGGING_DECL(...)                                                                                         \
-    BOOST_PP_SEQ_FOR_EACH(MODLEVELDEC, spdlog::level::level_enum::off, BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))
-
-#define SISL_LOGGING_DEF(...)                                                                                          \
-    BOOST_PP_SEQ_FOR_EACH(MODLEVELDEF, spdlog::level::level_enum::err, BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))
-
-#define SISL_LOGGING_INIT(...)                                                                                         \
-    sisl::logging::InitModules s_init_enabled_mods{                                                                    \
-        BOOST_PP_SEQ_FOR_EACH(MOD_LEVEL_STRING, , BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))};
-
 namespace sisl {
 namespace logging {
+
 typedef int SignalType;
 typedef void (*sig_handler_t)(SignalType);
 

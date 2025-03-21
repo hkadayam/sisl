@@ -23,8 +23,8 @@ target_sources(sisl_logging PRIVATE
 )
 target_link_libraries(sisl_logging PUBLIC ${LOGGING_DEPS} -rdynamic)
 
-add_executable(logging_example)
-target_sources(logging_example PRIVATE
-  test/example.cpp
+add_executable(logging_example_v2)
+target_sources(logging_example_v2 PRIVATE
+  test/example_v2.cpp
   )
-target_link_libraries(logging_example sisl_logging)
+target_link_libraries(logging_example_v2 ${LOGGING_DEPS} sisl_logging)
