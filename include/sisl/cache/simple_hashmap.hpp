@@ -41,8 +41,8 @@ class SimpleHashBucket;
 
 ENUM(hash_op_t, uint8_t, CREATE, ACCESS, DELETE, RESIZE)
 
-template < typename K >
-using key_access_cb_t = std::function< void(const ValueEntryBase&, const K&, const hash_op_t) >;
+template < typename K, typename V >
+using kv_access_cb_t = std::function< void(const ValueEntryBase&, const K&, const V&, const hash_op_t) >;
 
 template < typename K, typename V >
 using key_extractor_cb_t = std::function< K(const V&) >;
@@ -56,7 +56,7 @@ private:
     uint32_t m_nbuckets;
     SimpleHashBucket< K, V >* m_buckets;
     key_extractor_cb_t< K, V > m_key_extract_cb;
-    key_access_cb_t< K > m_key_access_cb;
+    kv_access_cb_t< K, V > m_kv_access_cb;
 
     static thread_local SimpleHashMap< K, V >* s_cur_hash_map;
 
@@ -66,7 +66,7 @@ private:
 
 public:
     SimpleHashMap(uint32_t nBuckets, const key_extractor_cb_t< K, V >& key_extractor,
-                  key_access_cb_t< K > access_cb = nullptr);
+                  kv_access_cb_t< K, V > access_cb = nullptr);
     ~SimpleHashMap();
 
     bool insert(const K& key, const V& value);
@@ -78,13 +78,13 @@ public:
 
     static void set_current_instance(SimpleHashMap< K, V >* hmap) { s_cur_hash_map = hmap; }
     static SimpleHashMap< K, V >* get_current_instance() { return s_cur_hash_map; }
-    static key_access_cb_t< K >& get_access_cb() { return get_current_instance()->m_key_access_cb; }
+    static kv_access_cb_t< K, V >& get_access_cb() { return get_current_instance()->m_kv_access_cb; }
     static key_extractor_cb_t< K, V >& extractor_cb() { return get_current_instance()->m_key_extract_cb; }
 
     template < typename... Args >
     static void call_access_cb(Args&&... args) {
-        if (get_current_instance()->m_key_access_cb) {
-            (get_current_instance()->m_key_access_cb)(std::forward< Args >(args)...);
+        if (get_current_instance()->m_kv_access_cb) {
+            (get_current_instance()->m_kv_access_cb)(std::forward< Args >(args)...);
         }
     }
     static size_t compute_hash(const K& key) {
@@ -128,7 +128,7 @@ public:
         while (it != m_list.end()) {
             SingleEntryHashNode< V >* n = &*it;
             const K k = SimpleHashMap< K, V >::extractor_cb()(it->m_value);
-            access_cb(*n, k, hash_op_t::DELETE);
+            access_cb(*n, k, n->m_value, hash_op_t::DELETE);
             it = m_list.erase(it);
             delete n;
         }
@@ -152,12 +152,12 @@ public:
         if (n == nullptr) {
             n = new SingleEntryHashNode< V >(input_value);
             m_list.insert(it, *n);
-            access_cb(*n, input_key, hash_op_t::CREATE);
+            access_cb(*n, input_key, input_value, hash_op_t::CREATE);
             return true;
         } else {
             if (overwrite_ok) {
                 n->m_value = input_value;
-                access_cb(*n, input_key, hash_op_t::ACCESS);
+                access_cb(*n, input_key, input_value, hash_op_t::ACCESS);
             }
             return false;
         }
@@ -175,7 +175,7 @@ public:
             } else if (input_key == k) {
                 out_val = n.m_value;
                 found = true;
-                access_cb(n, input_key, hash_op_t::ACCESS);
+                access_cb(n, input_key, out_val, hash_op_t::ACCESS);
                 break;
             }
         }
@@ -200,7 +200,7 @@ public:
         }
 
         if (n) {
-            access_cb(*n, input_key, hash_op_t::DELETE);
+            access_cb(*n, input_key, n->m_value, hash_op_t::DELETE);
             out_val = n->m_value;
             m_list.erase(it);
             delete n;
@@ -230,16 +230,15 @@ public:
         if (n == nullptr) {
             n = new SingleEntryHashNode< V >(V{});
             m_list.insert(it, *n);
-            access_cb(*n, input_key, hash_op_t::CREATE);
             found = false;
         }
 
         if (update_or_delete_cb(n->m_value, found)) {
-            access_cb(*n, input_key, hash_op_t::DELETE);
+            if (found) { access_cb(*n, input_key, n->m_value, hash_op_t::DELETE); }
             m_list.erase(it);
             delete n;
         } else {
-            access_cb(*n, input_key, hash_op_t::ACCESS);
+            access_cb(*n, input_key, n->m_value, (found ? hash_op_t::ACCESS : hash_op_t::CREATE));
         }
 
         return !found;
@@ -256,7 +255,7 @@ public:
                 break;
             } else if (input_key == k) {
                 found = true;
-                access_cb(n, input_key, hash_op_t::ACCESS);
+                access_cb(n, input_key, n.m_value, hash_op_t::ACCESS);
                 update_cb(n.m_value);
                 break;
             }
@@ -265,16 +264,16 @@ public:
     }
 
 private:
-    static void access_cb(const SingleEntryHashNode< V >& node, const K& key, hash_op_t op) {
-        SimpleHashMap< K, V >::call_access_cb((const ValueEntryBase&)node, key, op);
+    static void access_cb(const SingleEntryHashNode< V >& node, const K& key, const V& value, hash_op_t op) {
+        SimpleHashMap< K, V >::call_access_cb((const ValueEntryBase&)node, key, value, op);
     }
 };
 
 ///////////////////////////////////////////// RangeHashMap Definitions ///////////////////////////////////
 template < typename K, typename V >
 SimpleHashMap< K, V >::SimpleHashMap(uint32_t nBuckets, const key_extractor_cb_t< K, V >& extract_cb,
-                                     key_access_cb_t< K > access_cb) :
-        m_nbuckets{nBuckets}, m_key_extract_cb{extract_cb}, m_key_access_cb{std::move(access_cb)} {
+                                     kv_access_cb_t< K, V > access_cb) :
+        m_nbuckets{nBuckets}, m_key_extract_cb{extract_cb}, m_kv_access_cb{std::move(access_cb)} {
     m_buckets = new SimpleHashBucket< K, V >[nBuckets];
 }
 

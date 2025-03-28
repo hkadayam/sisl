@@ -26,22 +26,27 @@ namespace sisl {
 
 template < typename K, typename V >
 class SimpleCache {
+public:
+    using size_extractor = std::function< uint32_t(const V&) >;
+
 private:
     std::shared_ptr< Evictor > m_evictor;
     key_extractor_cb_t< K, V > m_key_extract_cb;
+    size_extractor m_size_extract_cb;
     SimpleHashMap< K, V > m_map;
     uint32_t m_record_family_id;
-    uint32_t m_per_value_size;
 
     static thread_local std::set< K > t_failed_keys;
 
 public:
-    SimpleCache(const std::shared_ptr< Evictor >& evictor, uint32_t num_buckets, uint32_t per_val_size,
-                key_extractor_cb_t< K, V >&& extract_cb, Evictor::can_evict_cb_t evict_cb = nullptr) :
+    SimpleCache(const std::shared_ptr< Evictor >& evictor, uint32_t num_buckets,
+                key_extractor_cb_t< K, V >&& extract_cb, size_extractor&& size_cb,
+                Evictor::can_evict_cb_t evict_cb = nullptr) :
             m_evictor{evictor},
             m_key_extract_cb{std::move(extract_cb)},
-            m_map{num_buckets, m_key_extract_cb, std::bind(&SimpleCache< K, V >::on_hash_operation, this, _1, _2, _3)},
-            m_per_value_size{per_val_size} {
+            m_size_extract_cb{std::move(size_cb)},
+            m_map{num_buckets, m_key_extract_cb,
+                  std::bind(&SimpleCache< K, V >::on_hash_operation, this, _1, _2, _3, _4)} {
         m_record_family_id = m_evictor->register_record_family(std::move(evict_cb));
     }
 
@@ -62,14 +67,14 @@ public:
     bool get(const K& key, V& out_val) { return m_map.get(key, out_val); }
 
 private:
-    void on_hash_operation(const CacheRecord& r, const K& key, const hash_op_t op) {
+    void on_hash_operation(const CacheRecord& r, const K& key, const V& value, const hash_op_t op) {
         CacheRecord& record = const_cast< CacheRecord& >(r);
         const auto hash_code = SimpleHashMap< K, V >::compute_hash(key);
 
         switch (op) {
         case hash_op_t::CREATE:
             record.set_record_family(m_record_family_id);
-            record.set_size(m_per_value_size);
+            record.set_size(m_size_extract_cb(value));
             if (!m_evictor->add_record(hash_code, record)) {
                 // We were not able to evict any, so mark this record and we will erase them upon all callbacks are done
                 t_failed_keys.insert(key);
