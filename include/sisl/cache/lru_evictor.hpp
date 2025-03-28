@@ -32,7 +32,7 @@ class LRUEvictor : public Evictor {
 public:
     typedef std::function< bool(const ValueEntryBase&) > can_evict_cb_t;
 
-    LRUEvictor(const int64_t max_size, const uint32_t num_partitions);
+    LRUEvictor(int64_t max_size, uint32_t num_partitions);
     LRUEvictor(const LRUEvictor&) = delete;
     LRUEvictor(LRUEvictor&&) noexcept = delete;
     LRUEvictor& operator=(const LRUEvictor&) = delete;
@@ -72,7 +72,7 @@ private:
         LRUPartition(LRUPartition&&) = default;
         LRUPartition& operator=(LRUPartition&&) = default;
 
-        void init(LRUEvictor* evictor, const uint32_t partition_num, const uint64_t max_size) {
+        void init(LRUEvictor* evictor, uint32_t partition_num, uint64_t max_size) {
             m_evictor = evictor;
             m_partition_num = partition_num;
             m_max_size = int64_cast(max_size);
@@ -83,8 +83,8 @@ private:
         void record_resized(const CacheRecord& record, uint32_t old_size);
 
     private:
-        bool do_evict(const uint32_t record_fid, const uint32_t needed_size);
-        bool will_fill(const uint32_t new_size) const { return ((m_filled_size + new_size) > m_max_size); }
+        bool do_evict(uint32_t record_fid, uint32_t needed_size);
+        bool will_fill(uint32_t new_size) const { return ((m_filled_size + new_size) > m_max_size); }
         bool is_full() const { return will_fill(0); }
     };
 

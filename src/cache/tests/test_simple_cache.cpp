@@ -76,11 +76,11 @@ protected:
         const auto cache_size = SISL_OPTIONS["cache_size_mb"].as< uint32_t >() * 1024 * 1024;
         m_evictor = std::make_unique< LRUEvictor >(cache_size, 8);
         m_cache = std::make_unique< SimpleCache< uint32_t, std::shared_ptr< Entry > > >(
-            m_evictor,                                                             // Evictor to evict used entries
-            cache_size / 4096,                                                     // Total number of buckets
-            g_val_size,                                                            // Value size
-            [](const std::shared_ptr< Entry >& e) -> uint32_t { return e->m_id; }, // Method to extract key
-            nullptr                                                                // Method to prevent eviction
+            m_evictor,                                                              // Evictor to evict used entries
+            cache_size / 4096,                                                      // Total number of buckets
+            [](const std::shared_ptr< Entry >& e) -> uint32_t { return e->m_id; },  // Method to extract key
+            [](const std::shared_ptr< Entry >&) -> uint32_t { return g_val_size; }, // Method to extract size
+            nullptr                                                                 // Method to prevent eviction
         );
 
         const auto cache_pct = SISL_OPTIONS["cache_pct"].as< uint32_t >();
