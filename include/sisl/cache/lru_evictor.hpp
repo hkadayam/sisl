@@ -83,7 +83,7 @@ private:
         void record_resized(const CacheRecord& record, uint32_t old_size);
 
     private:
-        bool do_evict(uint32_t record_fid, uint32_t needed_size);
+        bool find_evict_candidates(uint32_t record_fid, uint32_t needed_size);
         bool will_fill(uint32_t new_size) const { return ((m_filled_size + new_size) > m_max_size); }
         bool is_full() const { return will_fill(0); }
     };

@@ -99,7 +99,9 @@ protected:
         const std::string data = gen_random_string(g_val_size);
         const auto [it, expected_insert] = m_shadow_map.insert_or_assign(id, data);
 
-        bool inserted = m_cache->upsert(std::make_shared< Entry >(id, data));
+        LOGTRACE("Inserting {}", id);
+        auto const [status, found] = m_cache->upsert(std::make_shared< Entry >(id, data));
+        bool inserted = (status == SimpleCacheStatus::success && !found);
         ASSERT_EQ(inserted, expected_insert)
             << "Mismatch about existence of key=" << id << " between shadow_map and cache";
     }
@@ -108,14 +110,15 @@ protected:
         const auto it = m_shadow_map.find(id);
         bool expected_found = (it != m_shadow_map.end());
 
+        LOGTRACE("Getting {}", id);
         std::shared_ptr< Entry > e = std::make_shared< Entry >(0);
-        bool found = m_cache->get(id, e);
-        if (found) {
+        auto status = m_cache->get(id, e);
+        if (status == SimpleCacheStatus::success) {
             ASSERT_EQ(expected_found, true) << "Object key=" << id << " is deleted, but still found in cache";
             ASSERT_EQ(e->m_contents, it->second) << "Contents for key=" << id << " mismatch";
             ++m_cache_hits;
         } else if (expected_found) {
-            bool inserted = m_cache->insert(std::make_shared< Entry >(id, it->second));
+            bool inserted = (m_cache->insert(std::make_shared< Entry >(id, it->second)) == SimpleCacheStatus::success);
             ASSERT_EQ(inserted, true) << "Unable to insert to the cache for key=" << id;
             ++m_cache_misses;
         }
@@ -126,7 +129,8 @@ protected:
         bool expected_found = (it != m_shadow_map.end());
 
         std::shared_ptr< Entry > removed_e = std::make_shared< Entry >(0);
-        bool removed = m_cache->remove(id, removed_e);
+        LOGTRACE("Removing {}", id);
+        bool removed = (m_cache->remove(id, removed_e) == SimpleCacheStatus::success);
         if (removed) {
             ASSERT_EQ(expected_found, true)
                 << "Object for key=" << id << " is deleted already, but still found in cache";

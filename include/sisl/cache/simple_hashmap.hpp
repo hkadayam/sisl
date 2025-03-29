@@ -75,6 +75,7 @@ public:
     bool erase(const K& key, V& out_val);
     bool update(const K& key, auto&& update_cb);
     bool upsert_or_delete(const K& key, auto&& update_or_delete_cb);
+    K record_to_key(const ValueEntryBase& record);
 
     static void set_current_instance(SimpleHashMap< K, V >* hmap) { s_cur_hash_map = hmap; }
     static SimpleHashMap< K, V >* get_current_instance() { return s_cur_hash_map; }
@@ -317,6 +318,11 @@ bool SimpleHashMap< K, V >::erase(const K& key, V& out_val) {
 #endif
     set_current_instance(this);
     return get_bucket(key).erase(key, out_val);
+}
+
+template < typename K, typename V >
+K SimpleHashMap< K, V >::record_to_key(const ValueEntryBase& record) {
+    return m_key_extract_cb(r_cast< SingleEntryHashNode< V > const& >(record).m_value);
 }
 
 /// This is a special atomic operation where user can insert_or_update_or_erase based on condition atomically. It

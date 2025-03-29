@@ -17,6 +17,7 @@
 #pragma once
 
 #include <set>
+#include <sisl/fds/utils.hpp>
 #include <sisl/cache/evictor.hpp>
 #include <sisl/cache/simple_hashmap.hpp>
 
@@ -24,47 +25,67 @@ using namespace std::placeholders;
 
 namespace sisl {
 
+ENUM(SimpleCacheStatus, uint8_t, success, not_found, duplicate, cant_evict);
+
 template < typename K, typename V >
 class SimpleCache {
 public:
+    using can_evict_cb_t = std::function< bool(const CacheRecord&) >;
     using size_extractor = std::function< uint32_t(const V&) >;
+
+    enum class Status : uint8_t { success, not_found, duplicate, cant_evict };
 
 private:
     std::shared_ptr< Evictor > m_evictor;
     key_extractor_cb_t< K, V > m_key_extract_cb;
+    can_evict_cb_t m_can_evict_cb;
     size_extractor m_size_extract_cb;
     SimpleHashMap< K, V > m_map;
     uint32_t m_record_family_id;
 
-    static thread_local std::set< K > t_failed_keys;
+    static thread_local std::vector< K > t_failed_keys;
+    static thread_local std::vector< K > t_to_evict_keys;
 
 public:
     SimpleCache(const std::shared_ptr< Evictor >& evictor, uint32_t num_buckets,
-                key_extractor_cb_t< K, V >&& extract_cb, size_extractor&& size_cb,
-                Evictor::can_evict_cb_t evict_cb = nullptr) :
+                key_extractor_cb_t< K, V >&& extract_cb, size_extractor&& size_cb, can_evict_cb_t evict_cb = nullptr) :
             m_evictor{evictor},
             m_key_extract_cb{std::move(extract_cb)},
+            m_can_evict_cb{std::move(evict_cb)},
             m_size_extract_cb{std::move(size_cb)},
             m_map{num_buckets, m_key_extract_cb,
                   std::bind(&SimpleCache< K, V >::on_hash_operation, this, _1, _2, _3, _4)} {
-        m_record_family_id = m_evictor->register_record_family(std::move(evict_cb));
+        m_record_family_id = m_evictor->register_record_family(
+            Evictor::RecordFamily{.do_evict_cb = std::bind(&SimpleCache< K, V >::do_evict, this, _1)});
     }
 
     ~SimpleCache() { m_evictor->unregister_record_family(m_record_family_id); }
 
-    bool insert(const V& value) {
+    SimpleCacheStatus insert(const V& value) {
         K k = m_key_extract_cb(value);
-        return m_map.insert(k, value);
+        bool const s = m_map.insert(k, value);
+        if (!s) { return SimpleCacheStatus::duplicate; }
+
+        // We were able to insert into map, but check if evictor had reported any errors
+        return handle_evictor_response();
     }
 
-    bool upsert(const V& value) {
+    std::pair< SimpleCacheStatus, bool > upsert(const V& value) {
         K k = m_key_extract_cb(value);
-        return m_map.upsert(k, value);
+        bool found = !m_map.upsert(k, value);
+
+        // We were able to insert into map, but check if evictor had reported any errors
+        auto const status = handle_evictor_response();
+        return std::make_pair(status, found);
     }
 
-    bool remove(const K& key, V& out_val) { return m_map.erase(key, out_val); }
+    SimpleCacheStatus remove(const K& key, V& out_val) {
+        return m_map.erase(key, out_val) ? SimpleCacheStatus::success : SimpleCacheStatus::not_found;
+    }
 
-    bool get(const K& key, V& out_val) { return m_map.get(key, out_val); }
+    SimpleCacheStatus get(const K& key, V& out_val) {
+        return m_map.get(key, out_val) ? SimpleCacheStatus::success : SimpleCacheStatus::not_found;
+    }
 
 private:
     void on_hash_operation(const CacheRecord& r, const K& key, const V& value, const hash_op_t op) {
@@ -77,15 +98,11 @@ private:
             record.set_size(m_size_extract_cb(value));
             if (!m_evictor->add_record(hash_code, record)) {
                 // We were not able to evict any, so mark this record and we will erase them upon all callbacks are done
-                t_failed_keys.insert(key);
+                t_failed_keys.push_back(key);
             }
             break;
 
         case hash_op_t::DELETE:
-            if (t_failed_keys.size()) {
-                // Check if this is a delete of failed keys, if so lets not add it to record
-                if (t_failed_keys.find(key) != t_failed_keys.end()) { return; }
-            }
             m_evictor->remove_record(hash_code, record);
             break;
 
@@ -102,8 +119,42 @@ private:
             break;
         }
     }
+
+    bool do_evict(const CacheRecord& record) {
+        if ((m_can_evict_cb == nullptr) || m_can_evict_cb(record)) {
+            t_to_evict_keys.push_back(m_map.record_to_key(record));
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    SimpleCacheStatus handle_evictor_response() {
+        SimpleCacheStatus status{SimpleCacheStatus::success};
+        if (!t_to_evict_keys.empty()) {
+            V dummy_val;
+            // Some keys had to be evicted, so remove them from the map
+            for (const auto& key : t_to_evict_keys) {
+                m_map.erase(key, dummy_val);
+            }
+            t_to_evict_keys.clear();
+        }
+
+        if (!t_failed_keys.empty()) {
+            V dummy_val;
+            for (const auto& key : t_failed_keys) {
+                m_map.erase(key, dummy_val);
+            }
+            t_failed_keys.clear();
+            status = SimpleCacheStatus::cant_evict;
+        }
+        return status;
+    }
 };
 
 template < typename K, typename V >
-thread_local std::set< K > SimpleCache< K, V >::t_failed_keys;
+thread_local std::vector< K > SimpleCache< K, V >::t_failed_keys;
+
+template < typename K, typename V >
+thread_local std::vector< K > SimpleCache< K, V >::t_to_evict_keys;
 } // namespace sisl

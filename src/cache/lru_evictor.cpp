@@ -44,12 +44,13 @@ void LRUEvictor::record_resized(uint64_t hash_code, const CacheRecord& record, u
 
 bool LRUEvictor::LRUPartition::add_record(CacheRecord& record) {
     std::unique_lock guard{m_list_guard};
-    if (will_fill(record.size()) > m_max_size) {
-        if (!do_evict(record.record_family_id(), record.size())) { return false; }
+    bool ret{true};
+    if (will_fill(record.size())) {
+        if (!find_evict_candidates(record.record_family_id(), record.size())) { ret = false; }
     }
     m_list.push_back(record);
     m_filled_size += record.size();
-    return true;
+    return ret;
 }
 
 void LRUEvictor::LRUPartition::remove_record(CacheRecord& record) {
@@ -70,28 +71,20 @@ void LRUEvictor::LRUPartition::record_resized(const CacheRecord& record, uint32_
     m_filled_size -= (record.size() - old_size);
 }
 
-bool LRUEvictor::LRUPartition::do_evict(uint32_t record_fid, uint32_t needed_size) {
+bool LRUEvictor::LRUPartition::find_evict_candidates(uint32_t record_fid, uint32_t needed_size) {
     size_t count{0};
 
     auto it = std::begin(m_list);
     while (will_fill(needed_size) && (it != std::end(m_list))) {
         CacheRecord& rec = *it;
-
-        /* return the next element */
-        if (!rec.is_pinned() && m_evictor->can_evict_cb(record_fid)(rec)) {
-            m_filled_size -= rec.size();
-            it = m_list.erase(it);
-        } else {
-            ++count;
-            it = std::next(it);
-        }
+        if (rec.is_pinned() || !m_evictor->do_evict_cb(record_fid)(rec)) { ++count; }
+        it = std::next(it);
     }
 
     if (count) { LOGDEBUG("LRU ejection had to skip {} entries", count); }
     if (is_full()) {
         // No available candidate to evict
-        LOGERROR("No cache space available: Eviction partition={} as "
-                 "total_entries={} rejected eviction request to add "
+        LOGERROR("No cache space available: Eviction partition={} as total_entries={} rejected eviction request to add "
                  "size={}, already filled={}",
                  m_partition_num, m_list.size(), needed_size, m_filled_size);
         return false;
