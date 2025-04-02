@@ -153,8 +153,8 @@ public:
         if (n == nullptr) {
             n = new SingleEntryHashNode< V >(input_value);
             m_list.insert(it, *n);
-            
-          (*n, input_key, input_value, hash_op_t::CREATE);
+
+            access_cb(*n, input_key, input_value, hash_op_t::CREATE);
             return true;
         } else {
             if (overwrite_ok) {
