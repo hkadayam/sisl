@@ -36,12 +36,6 @@ public:
     // post_eviction_cb: called after eviction to do any cleanup. If this returns false, the record is reinserted.
     // and we try to evict the next record.
     struct RecordFamily {
-        Evictor::eviction_cb_t can_evict_cb{nullptr};
-        Evictor::eviction_cb_t post_eviction_cb{nullptr};
-    };
-    using do_evict_cb_t = std::function< bool(const CacheRecord&) >;
-
-    struct RecordFamily {
         bool registered{false};
         Evictor::do_evict_cb_t do_evict_cb{nullptr};
     };
@@ -61,10 +55,6 @@ public:
         while (id < m_eviction_cbs.size()) {
             if (m_eviction_cbs[id].first == false) {
                 m_eviction_cbs[id] = std::make_pair(true, record_family);
-        while (id < m_record_families.size()) {
-            if (m_record_families[id].registered == false) {
-                m_record_families[id] = std::move(family);
-                m_record_families[id].registered = true;
                 return id;
             }
             ++id;
@@ -73,7 +63,7 @@ public:
         return 0;
     }
 
-    void unregister_record_family(const uint32_t record_type_id) {
+    void unregister_record_family(uint32_t record_type_id) {
         std::unique_lock lk(m_reg_mtx);
         m_eviction_cbs[record_type_id] = std::make_pair(false, RecordFamily{});
         m_record_families[record_type_id].registered = false;
