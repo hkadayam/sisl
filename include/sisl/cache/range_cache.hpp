@@ -27,17 +27,21 @@ class RangeCache {
 private:
     std::shared_ptr< Evictor > m_evictor;
     RangeHashMap< K > m_map;
+    can_evict_cb_t m_can_evict_cb;
     uint32_t m_record_family_id;
     uint32_t m_per_value_size;
 
     static thread_local std::set< RangeKey< K > > t_failed_keys;
 
 public:
+    using can_evict_cb_t = std::function< bool(const CacheRecord&) >;
+
     RangeCache(const std::shared_ptr< Evictor >& evictor, const uint32_t num_buckets, const uint32_t per_val_size,
-               Evictor::can_evict_cb_t evict_cb = nullptr) :
+               can_evict_cb_t evict_cb = nullptr) :
             m_evictor{evictor},
             m_map{RangeHashMap< K >(num_buckets, bind_this(RangeCache< K >::extract_value, 3),
                                     bind_this(RangeCache< K >::on_hash_operation, 4))},
+            m_can_evict_cb{std::move(evict_cb)},
             m_per_value_size{per_val_size} {
         m_evictor->register_record_family(std::move(evict_cb));
     }
