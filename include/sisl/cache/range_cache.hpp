@@ -43,7 +43,7 @@ public:
                                     bind_this(RangeCache< K >::on_hash_operation, 4))},
             m_can_evict_cb{std::move(evict_cb)},
             m_per_value_size{per_val_size} {
-        m_evictor->register_record_family(std::move(evict_cb));
+        m_evictor->register_record_family(Evictor::RecordFamily{.can_evict_cb = evict_cb});
     }
 
     ~RangeCache() { m_evictor->unregister_record_family(m_record_family_id); }
