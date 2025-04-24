@@ -72,7 +72,7 @@ public:
 
     virtual bool add_record(uint64_t hash_code, CacheRecord& record) = 0;
     virtual void remove_record(uint64_t hash_code, CacheRecord& record) = 0;
-    virtual void record_accessed(uint64_t hash_code, CacheRecord& record) = 0;
+    virtual bool record_accessed(uint64_t hash_code, CacheRecord& record) = 0;
     virtual void record_resized(uint64_t hash_code, const CacheRecord& record, uint32_t old_size) = 0;
 
     int64_t max_size() const { return m_max_size; }
