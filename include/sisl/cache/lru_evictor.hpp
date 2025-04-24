@@ -45,7 +45,7 @@ public:
     /* Upvote the entry. This depends on the current rank will move up and thus reduce the chances of getting evicted.
      * In case of LRU allocation, it moves to the tail end of the list. The entry is expected to be present in the
      * eviction list */
-    void record_accessed(uint64_t hash_code, CacheRecord& record) override;
+    bool record_accessed(uint64_t hash_code, CacheRecord& record) override;
 
     void record_resized(uint64_t hash_code, const CacheRecord& record, uint32_t old_size) override;
 
@@ -79,7 +79,7 @@ private:
         }
         bool add_record(CacheRecord& record);
         void remove_record(CacheRecord& record);
-        void record_accessed(CacheRecord& record);
+        bool record_accessed(CacheRecord& record);
         void record_resized(const CacheRecord& record, uint32_t old_size);
 
     private:

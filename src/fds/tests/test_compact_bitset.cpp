@@ -52,50 +52,48 @@ protected:
 };
 
 TEST_F(CompactBitsetTest, AlternateBits) {
-    ASSERT_EQ(m_bset->size(), m_buf.size() * 8);
-
-    for (CompactBitSet::bit_count_t i{0}; i < m_bset->size(); ++i) {
-        ASSERT_EQ(m_bset->is_bit_set(i), false);
+    for (CompactBitSet::bit_count_t i{0}; i < m_bset->size(m_buf); ++i) {
+        ASSERT_EQ(m_bset->is_bit_set(m_buf, i), false);
     }
 
     // Set alternate bits
-    for (CompactBitSet::bit_count_t i{0}; i < m_bset->size(); i += 2) {
-        m_bset->set_bit(i);
+    for (CompactBitSet::bit_count_t i{0}; i < m_bset->size(m_buf); i += 2) {
+        m_bset->set_bit(m_buf, i);
     }
 
-    for (CompactBitSet::bit_count_t i{0}; i < m_bset->size(); ++i) {
-        ASSERT_EQ(m_bset->is_bit_set(i), (i % 2 == 0));
+    for (CompactBitSet::bit_count_t i{0}; i < m_bset->size(m_buf); ++i) {
+        ASSERT_EQ(m_bset->is_bit_set(m_buf, i), (i % 2 == 0));
     }
 
     // Validate if next set or reset bit starting from itself returns itself back
-    for (CompactBitSet::bit_count_t i{0}; i < m_bset->size(); ++i) {
-        ASSERT_EQ(m_bset->get_next_set_or_reset_bit(i, ((i % 2) == 0)), i);
+    for (CompactBitSet::bit_count_t i{0}; i < m_bset->size(m_buf); ++i) {
+        ASSERT_EQ(m_bset->get_next_set_or_reset_bit(m_buf, i, ((i % 2) == 0)), i);
     }
 
     // Validate if next set or reset bit starting from previous returns next bit
-    for (CompactBitSet::bit_count_t i{1}; i < m_bset->size(); ++i) {
-        ASSERT_EQ(m_bset->get_next_set_or_reset_bit(i - 1, ((i % 2) == 0)), i);
+    for (CompactBitSet::bit_count_t i{1}; i < m_bset->size(m_buf); ++i) {
+        ASSERT_EQ(m_bset->get_next_set_or_reset_bit(m_buf, i - 1, ((i % 2) == 0)), i);
     }
 }
 
 TEST_F(CompactBitsetTest, AllBits) {
     // Set all bits
-    for (CompactBitSet::bit_count_t i{0}; i < m_bset->size(); ++i) {
-        m_bset->set_bit(i);
+    for (CompactBitSet::bit_count_t i{0}; i < m_bset->size(m_buf); ++i) {
+        m_bset->set_bit(m_buf, i);
     }
 
-    for (CompactBitSet::bit_count_t i{0}; i < m_bset->size(); ++i) {
-        ASSERT_EQ(m_bset->is_bit_set(i), true);
+    for (CompactBitSet::bit_count_t i{0}; i < m_bset->size(m_buf); ++i) {
+        ASSERT_EQ(m_bset->is_bit_set(m_buf, i), true);
     }
 
-    for (CompactBitSet::bit_count_t i{0}; i < m_bset->size(); ++i) {
-        ASSERT_EQ(m_bset->get_next_set_bit(i), i);
-        ASSERT_EQ(m_bset->get_next_reset_bit(i), CompactBitSet::inval_bit);
+    for (CompactBitSet::bit_count_t i{0}; i < m_bset->size(m_buf); ++i) {
+        ASSERT_EQ(m_bset->get_next_set_bit(m_buf, i), i);
+        ASSERT_EQ(m_bset->get_next_reset_bit(m_buf, i), CompactBitSet::inval_bit);
     }
 }
 
 TEST_F(CompactBitsetTest, RandomBitsWithReload) {
-    auto const num_bits = m_bset->size();
+    auto const num_bits = m_bset->size(m_buf);
     boost::dynamic_bitset<> shadow_bset{num_bits};
 
     std::random_device rd;
@@ -104,28 +102,28 @@ TEST_F(CompactBitsetTest, RandomBitsWithReload) {
     for (uint64_t i{0}; i < num_bits / 2; ++i) {
         auto bit = bit_gen(re);
         shadow_bset.set(bit);
-        m_bset->set_bit(s_cast< CompactBitSet::bit_count_t >(bit));
+        m_bset->set_bit(m_buf, s_cast< CompactBitSet::bit_count_t >(bit));
     }
 
     auto validate = [this, &shadow_bset]() {
         CompactBitSet::bit_count_t prev_set_bit{CompactBitSet::inval_bit};
-        for (uint64_t i{0}; i < m_bset->size(); ++i) {
+        for (uint64_t i{0}; i < m_bset->size(m_buf); ++i) {
             auto next_shadow_set_bit = (i == 0) ? shadow_bset.find_first() : shadow_bset.find_next(i - 1);
-            CompactBitSet::bit_count_t next_set_bit = m_bset->get_next_set_bit(i);
+            CompactBitSet::bit_count_t next_set_bit = m_bset->get_next_set_bit(m_buf, i);
             if (next_shadow_set_bit == boost::dynamic_bitset<>::npos) {
                 ASSERT_EQ(next_set_bit, CompactBitSet::inval_bit);
             } else {
                 ASSERT_EQ(next_set_bit, next_shadow_set_bit);
                 if (next_set_bit == i) { prev_set_bit = i; }
-                ASSERT_EQ(m_bset->get_prev_set_bit(i), prev_set_bit);
+                ASSERT_EQ(m_bset->get_prev_set_bit(m_buf, i), prev_set_bit);
             }
         }
 
         // Flip it back so we can look for reset bits
         shadow_bset = shadow_bset.flip();
-        for (uint64_t i{0}; i < m_bset->size(); ++i) {
+        for (uint64_t i{0}; i < m_bset->size(m_buf); ++i) {
             auto next_shadow_reset_bit = (i == 0) ? shadow_bset.find_first() : shadow_bset.find_next(i - 1);
-            CompactBitSet::bit_count_t next_reset_bit = m_bset->get_next_reset_bit(i);
+            CompactBitSet::bit_count_t next_reset_bit = m_bset->get_next_reset_bit(m_buf, i);
             if (next_shadow_reset_bit == boost::dynamic_bitset<>::npos) {
                 ASSERT_EQ(next_reset_bit, CompactBitSet::inval_bit);
             } else {

@@ -100,10 +100,15 @@ protected:
         const auto [it, expected_insert] = m_shadow_map.insert_or_assign(id, data);
 
         LOGTRACE("Inserting {}", id);
-        auto const [status, found] = m_cache->upsert(std::make_shared< Entry >(id, data));
-        bool inserted = (status == SimpleCacheStatus::success && !found);
-        ASSERT_EQ(inserted, expected_insert)
+        auto status = m_cache->update(std::make_shared< Entry >(id, data));
+        ASSERT_EQ(status, expected_insert ? SimpleCacheStatus::not_found : SimpleCacheStatus::success)
             << "Mismatch about existence of key=" << id << " between shadow_map and cache";
+
+        if (status == SimpleCacheStatus::not_found) {
+            status = m_cache->insert(std::make_shared< Entry >(id, data));
+            ASSERT_EQ(status, SimpleCacheStatus::success)
+                << "Mismatch about existence of key=" << id << " between shadow_map and cache";
+        }
     }
 
     void read(uint32_t id) {

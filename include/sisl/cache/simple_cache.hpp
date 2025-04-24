@@ -45,6 +45,7 @@ private:
 
     static thread_local std::vector< K > t_failed_keys;
     static thread_local std::vector< K > t_to_evict_keys;
+    static thread_local std::vector< K > t_invalidated_keys;
 
 public:
     SimpleCache(const std::shared_ptr< Evictor >& evictor, uint32_t num_buckets,
@@ -70,6 +71,15 @@ public:
         return handle_evictor_response();
     }
 
+    SimpleCacheStatus update(const V& value) {
+        K k = m_key_extract_cb(value);
+        bool success = m_map.update(k, [&value](V& v) { v = value; });
+
+        // We were able to insert into map, but check if evictor had reported any errors
+        return success ? handle_evictor_response() : SimpleCacheStatus::not_found;
+    }
+
+#if 0
     std::pair< SimpleCacheStatus, bool > upsert(const V& value) {
         K k = m_key_extract_cb(value);
         bool found = !m_map.upsert(k, value);
@@ -78,13 +88,16 @@ public:
         auto const status = handle_evictor_response();
         return std::make_pair(status, found);
     }
+#endif
 
     SimpleCacheStatus remove(const K& key, V& out_val) {
-        return m_map.erase(key, out_val) ? SimpleCacheStatus::success : SimpleCacheStatus::not_found;
+        bool success = m_map.erase(key, out_val);
+        return success ? handle_evictor_response() : SimpleCacheStatus::not_found;
     }
 
     SimpleCacheStatus get(const K& key, V& out_val) {
-        return m_map.get(key, out_val) ? SimpleCacheStatus::success : SimpleCacheStatus::not_found;
+        bool success = m_map.get(key, out_val);
+        return success ? handle_evictor_response() : SimpleCacheStatus::not_found;
     }
 
 private:
@@ -107,7 +120,9 @@ private:
             break;
 
         case hash_op_t::ACCESS:
-            m_evictor->record_accessed(hash_code, record);
+            // If evictor says that this record is already soft deleted, then add to thread variable, which will be
+            // cleaned up by the top level SimpleCache API.
+            if (!m_evictor->record_accessed(hash_code, record)) { t_invalidated_keys.push_back(key); }
             break;
 
         case hash_op_t::RESIZE: {
@@ -148,6 +163,15 @@ private:
             t_failed_keys.clear();
             status = SimpleCacheStatus::cant_evict;
         }
+
+        if (!t_invalidated_keys.empty()) {
+            // We support as of now only 1 key get per operation. When we support bulk operation, we can relax this
+            // assert
+            DEBUG_ASSERT_EQ(t_invalidated_keys.size(), 1,
+                            "We should have encountered only 1 invalidated key during update/remove/get");
+            t_invalidated_keys.clear();
+            status = SimpleCacheStatus::not_found;
+        }
         return status;
     }
 };
@@ -157,4 +181,7 @@ thread_local std::vector< K > SimpleCache< K, V >::t_failed_keys;
 
 template < typename K, typename V >
 thread_local std::vector< K > SimpleCache< K, V >::t_to_evict_keys;
+
+template < typename K, typename V >
+thread_local std::vector< K > SimpleCache< K, V >::t_invalidated_keys;
 } // namespace sisl

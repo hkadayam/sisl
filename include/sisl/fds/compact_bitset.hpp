@@ -25,15 +25,11 @@ public:
     using bit_count_t = uint32_t;
 
 private:
-    using bitword_type = Bitword< unsafe_bits< uint64_t > >;
+    using bitword_type = sisl::Bitword< unsafe_bits< uint64_t > >;
 
     struct serialized {
         bitword_type words[1]{bitword_type{}};
     };
-
-    bit_count_t nbits_{0};
-    bool allocated_{false};
-    serialized* s_{nullptr};
 
 private:
     static constexpr size_t word_size_bytes() { return sizeof(unsafe_bits< uint64_t >); }
@@ -44,53 +40,42 @@ public:
     static constexpr bit_count_t inval_bit = std::numeric_limits< bit_count_t >::max();
     static constexpr uint8_t size_multiples() { return word_size_bytes(); }
 
-    explicit CompactBitSet(bit_count_t nbits) {
-        DEBUG_ASSERT_GT(nbits, 0, "compact bitset should have nbits > 0");
-        nbits_ = s_cast< bit_count_t >(sisl::round_up(nbits, word_size_bits()));
-        size_t const buf_size = nbits_ / 8;
-
-        uint8_t* buf = new uint8_t[buf_size];
-        std::memset(buf, 0, buf_size);
-        s_ = r_cast< serialized* >(buf);
-        allocated_ = true;
-    }
-
-    CompactBitSet(sisl::blob buf, bool init_bits) : s_{r_cast< serialized* >(buf.bytes())} {
+    CompactBitSet(sisl::blob buf, bool init_bits) {
         DEBUG_ASSERT_GT(buf.size(), 0, "compact bitset initialized with empty buffer");
         DEBUG_ASSERT_EQ(buf.size() % word_size_bytes(), 0, "compact bitset buffer size must be multiple of word size");
-        nbits_ = buf.size() * 8;
         if (init_bits) { std::memset(buf.bytes(), 0, buf.size()); }
     }
 
-    ~CompactBitSet() {
-        if (allocated_) { delete[] uintptr_cast(s_); }
-    }
+    ~CompactBitSet() = default;
 
-    bit_count_t size() const { return nbits_; }
-    void set_bit(bit_count_t start) { set_reset_bit(start, true); }
-    void reset_bit(bit_count_t start) { set_reset_bit(start, false); }
+    void set_bit(sisl::blob buf, bit_count_t start) { set_reset_bit(buf, start, true); }
+    void reset_bit(sisl::blob buf, bit_count_t start) { set_reset_bit(buf, start, false); }
 
-    bool is_bit_set(bit_count_t bit) const {
-        bitword_type const* word_ptr = get_word_const(bit);
+    bool is_bit_set(sisl::blob const& buf, bit_count_t bit) const {
+        bitword_type const* word_ptr = get_word(buf, bit);
         if (!word_ptr) { return false; }
         uint8_t const offset = get_word_offset(bit);
         return word_ptr->is_bit_set_reset(offset, true);
     }
 
-    bit_count_t get_next_set_bit(bit_count_t start_bit) const { return get_next_set_or_reset_bit(start_bit, true); }
-    bit_count_t get_next_reset_bit(bit_count_t start_bit) const { return get_next_set_or_reset_bit(start_bit, false); }
+    bit_count_t get_next_set_bit(sisl::blob const& buf, bit_count_t start_bit) const {
+        return get_next_set_or_reset_bit(buf, start_bit, true);
+    }
+    bit_count_t get_next_reset_bit(sisl::blob const& buf, bit_count_t start_bit) const {
+        return get_next_set_or_reset_bit(buf, start_bit, false);
+    }
 
     /// @brief This method gets the previous set bit from starting bit (including the start bit). So if start bit
     /// is 1, it will return the start bit.
     /// @param start_bit: Start bit should be > 0 and <= size()
     /// @return Returns the previous set bit or inval_bit if nothing is set
-    bit_count_t get_prev_set_bit(bit_count_t start_bit) const {
+    bit_count_t get_prev_set_bit(sisl::blob const& buf, bit_count_t start_bit) const {
         // check first word which may be partial
         uint8_t offset = get_word_offset(start_bit);
         bit_count_t word_idx = get_word_index(start_bit);
 
         do {
-            bitword_type const* word_ptr = &s_->words[word_idx];
+            bitword_type const* word_ptr = word_from_index(buf, word_idx);
             if (!word_ptr) { return inval_bit; }
 
             uint8_t nbit{0};
@@ -103,19 +88,19 @@ public:
         return inval_bit;
     }
 
-    void set_reset_bit(bit_count_t bit, bool value) {
-        bitword_type* word_ptr = get_word(bit);
+    void set_reset_bit(sisl::blob buf, bit_count_t bit, bool value) {
+        bitword_type* word_ptr = get_word(buf, bit);
         if (!word_ptr) { return; }
         uint8_t const offset = get_word_offset(bit);
         word_ptr->set_reset_bits(offset, 1, value);
     }
 
-    bit_count_t get_next_set_or_reset_bit(bit_count_t start_bit, bool search_for_set_bit) const {
+    bit_count_t get_next_set_or_reset_bit(sisl::blob const& buf, bit_count_t start_bit, bool search_for_set_bit) const {
         bit_count_t ret{inval_bit};
 
         // check first word which may be partial
         uint8_t const offset = get_word_offset(start_bit);
-        bitword_type const* word_ptr = get_word_const(start_bit);
+        bitword_type const* word_ptr = get_word(buf, start_bit);
         if (!word_ptr) { return ret; }
 
         uint8_t nbit{0};
@@ -126,7 +111,7 @@ public:
         if (ret == inval_bit) {
             // test rest of whole words
             bit_count_t current_bit = start_bit + (bitword_type::bits() - offset);
-            bit_count_t bits_remaining = (current_bit > size()) ? 0 : size() - current_bit;
+            bit_count_t bits_remaining = (current_bit > size(buf)) ? 0 : size(buf) - current_bit;
             while (bits_remaining > 0) {
                 ++word_ptr;
                 found =
@@ -140,36 +125,40 @@ public:
             }
         }
 
-        if (ret >= size()) { ret = inval_bit; }
+        if (ret >= size(buf)) { ret = inval_bit; }
         return ret;
     }
 
-    std::string to_string() const {
+    uint32_t size(sisl::blob const& buf) const { return buf.size() * 8; }
+
+    std::string to_string(sisl::blob const& buf) const {
         std::string str;
-        auto const num_words = size() / word_size_bits();
+        auto const num_words = buf.size() / word_size_bytes();
         for (uint32_t i{0}; i < num_words; ++i) {
-            fmt::format_to(std::back_inserter(str), "{}", s_->words[i].to_string());
+            fmt::format_to(std::back_inserter(str), "{}", word_from_index(buf, i)->to_string());
         }
         return str;
     }
 
 private:
-    bitword_type* get_word(bit_count_t bit) {
-        return (sisl_unlikely(bit >= nbits_)) ? nullptr : &s_->words[bit / word_size_bits()];
+    bitword_type* get_word(sisl::blob& buf, bit_count_t bit) {
+        return (sisl_unlikely(bit >= size(buf))) ? nullptr : &to(buf)->words[bit / word_size_bits()];
     }
 
-    bitword_type const* get_word_const(bit_count_t bit) const {
-        return (sisl_unlikely(bit >= nbits_)) ? nullptr : &s_->words[bit / word_size_bits()];
+    bitword_type const* get_word(sisl::blob const& buf, bit_count_t bit) const {
+        return (sisl_unlikely(bit >= size(buf))) ? nullptr : &to(buf)->words[bit / word_size_bits()];
     }
 
-    bit_count_t get_word_index(bit_count_t bit) const {
-        DEBUG_ASSERT(s_, "compact bitset not initialized");
-        return bit / word_size_bits();
+    bitword_type const* word_from_index(sisl::blob const& buf, bit_count_t index) const {
+        return &to(buf)->words[index];
     }
 
-    uint8_t get_word_offset(bit_count_t bit) const {
-        assert(s_);
-        return static_cast< uint8_t >(bit & word_mask());
-    }
+    serialized* to(sisl::blob& buf) { return r_cast< serialized* >(buf.bytes()); }
+
+    serialized const* to(sisl::blob const& buf) const { return r_cast< serialized const* >(buf.cbytes()); }
+
+    bit_count_t get_word_index(bit_count_t bit) const { return bit / word_size_bits(); }
+
+    uint8_t get_word_offset(bit_count_t bit) const { return static_cast< uint8_t >(bit & word_mask()); }
 };
 } // namespace sisl
