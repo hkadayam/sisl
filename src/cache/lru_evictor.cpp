@@ -34,8 +34,8 @@ void LRUEvictor::remove_record(uint64_t hash_code, CacheRecord& record) {
     get_partition(hash_code).remove_record(record);
 }
 
-void LRUEvictor::record_accessed(uint64_t hash_code, CacheRecord& record) {
-    get_partition(hash_code).record_accessed(record);
+bool LRUEvictor::record_accessed(uint64_t hash_code, CacheRecord& record) {
+    return get_partition(hash_code).record_accessed(record);
 }
 
 void LRUEvictor::record_resized(uint64_t hash_code, const CacheRecord& record, uint32_t old_size) {
@@ -60,10 +60,15 @@ void LRUEvictor::LRUPartition::remove_record(CacheRecord& record) {
     m_list.erase(it);
 }
 
-void LRUEvictor::LRUPartition::record_accessed(CacheRecord& record) {
+bool LRUEvictor::LRUPartition::record_accessed(CacheRecord& record) {
     std::unique_lock guard{m_list_guard};
+    if (record.is_invalidated()) {
+        // Record invalidated (soft deleted), will be removed soon, treat it as record not found
+        return false;
+    }
     m_list.erase(m_list.iterator_to(record));
     m_list.push_back(record);
+    return true;
 }
 
 void LRUEvictor::LRUPartition::record_resized(const CacheRecord& record, uint32_t old_size) {
@@ -77,7 +82,13 @@ bool LRUEvictor::LRUPartition::find_evict_candidates(uint32_t record_fid, uint32
     auto it = std::begin(m_list);
     while (will_fill(needed_size) && (it != std::end(m_list))) {
         CacheRecord& rec = *it;
-        if (rec.is_pinned() || !m_evictor->do_evict_cb(record_fid)(rec)) { ++count; }
+        if (rec.is_pinned() || !m_evictor->do_evict_cb(record_fid)(rec)) {
+            ++count;
+        } else {
+            // We are evicting this record, do a soft delete now so that it can get cleaned up by the
+            // caller later, but when we encounter the record we treat it as not found.
+            rec.invalidate();
+        }
         it = std::next(it);
     }
 
