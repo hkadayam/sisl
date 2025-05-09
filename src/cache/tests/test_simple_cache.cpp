@@ -44,50 +44,70 @@ struct Entry {
     std::string m_contents;
 };
 
-static constexpr std::array< const char, 62 > alphanum{
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K',
-    'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f',
-    'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'};
+static std::string gen_value(uint32_t key, size_t len) {
+    std::stringstream ss;
+    ss << std::hex << std::setw(16) << std::setfill('0') << len;
 
-static std::string gen_random_string(size_t len) {
-    std::string str;
-    static thread_local std::random_device rd{};
-    static thread_local std::default_random_engine re{rd()};
-    std::uniform_int_distribution< size_t > rand_char{0, alphanum.size() - 1};
-    for (size_t i{0}; i < len; ++i) {
-        str += alphanum[rand_char(re)];
+    auto const num_words = (len - sizeof(size_t)) / sizeof(uint32_t);
+    for (size_t i{0}; i < num_words; ++i) {
+        ss << std::hex << std::setw(8) << std::setfill('0') << key;
     }
-    str += '\0';
-    return str;
+    return ss.str();
+}
+
+static bool validate_value(uint32_t key, std::string const& value) {
+    // uint64_t len_read = std::stoul(value.substr(0, 16), nullptr, 16);
+    uint32_t key_read1 = std::stoul(value.substr(16, 8), nullptr, 16);
+    uint32_t key_read2 = std::stoul(value.substr(16, 8), nullptr, 16);
+
+    return ((key_read1 == key) && (key_read2 == key));
 }
 
 struct SimpleCacheTest : public testing::Test {
 protected:
     std::shared_ptr< Evictor > m_evictor;
     std::unique_ptr< SimpleCache< uint32_t, std::shared_ptr< Entry > > > m_cache;
-    std::unordered_map< uint32_t, std::string > m_shadow_map;
 
-    uint64_t m_cache_misses{0};
-    uint64_t m_cache_hits{0};
-    uint32_t m_total_keys;
+    // We can't always maintain shadow, especially for multi-threaded case
+    std::set< uint32_t > m_existing_keys;
+    bool m_maintain_shadow{true};
+
+    std::atomic< uint64_t > m_num_cache_entries{0};
+    std::atomic< uint64_t > m_cache_misses{0};
+    std::atomic< uint64_t > m_cache_hits{0};
+    std::atomic< uint64_t > m_eviction_count{0};
+    std::atomic< uint64_t > m_nread_ops{0};
+    std::atomic< uint64_t > m_nwrite_ops{0};
+    std::atomic< uint64_t > m_nremove_ops{0};
+
+    uint32_t m_max_cached_keys;
+    uint32_t m_max_keys;
 
 protected:
     void SetUp() override {
-        const auto cache_size = SISL_OPTIONS["cache_size_mb"].as< uint32_t >() * 1024 * 1024;
+        const auto store_size = SISL_OPTIONS["store_size_mb"].as< uint32_t >() * 1024 * 1024;
+        const auto cache_pct = SISL_OPTIONS["cache_pct"].as< uint32_t >();
+        const auto cache_size = (store_size * cache_pct) / 10;
+        m_max_keys = store_size / g_val_size;
+        m_max_cached_keys = cache_size / g_val_size;
+        LOGINFO("Initializing store_size={} MB, cache_pct={}, cache_size={} max_keys={} max_cached_keys={}", store_size,
+                cache_pct, cache_size, m_max_keys, m_max_cached_keys);
+
         m_evictor = std::make_unique< LRUEvictor >(cache_size, 8);
         m_cache = std::make_unique< SimpleCache< uint32_t, std::shared_ptr< Entry > > >(
             m_evictor,                                                              // Evictor to evict used entries
             cache_size / 4096,                                                      // Total number of buckets
             [](const std::shared_ptr< Entry >& e) -> uint32_t { return e->m_id; },  // Method to extract key
             [](const std::shared_ptr< Entry >&) -> uint32_t { return g_val_size; }, // Method to extract size
-            nullptr                                                                 // Method to prevent eviction
-        );
-
-        const auto cache_pct = SISL_OPTIONS["cache_pct"].as< uint32_t >();
-        const auto total_data_size = (100 * cache_size) / cache_pct;
-        m_total_keys = total_data_size / g_val_size;
-        LOGINFO("Initializing cache_size={} MB, cache_pct={}, total_data_size={}",
-                SISL_OPTIONS["cache_size_mb"].as< uint32_t >(), cache_pct, total_data_size);
+            [this](const CacheRecord& rec) -> bool {                                // Method to prevent eviction
+                if (m_maintain_shadow) {
+                    const auto& hnode = (sisl::SingleEntryHashNode< std::shared_ptr< Entry > >&)rec;
+                    m_existing_keys.erase(hnode.m_value->m_id);
+                }
+                ++m_eviction_count;
+                --m_num_cache_entries;
+                return true;
+            });
     }
 
     void TearDown() override {
@@ -96,105 +116,186 @@ protected:
     }
 
     void write(uint32_t id) {
-        const std::string data = gen_random_string(g_val_size);
-        const auto [it, expected_insert] = m_shadow_map.insert_or_assign(id, data);
-
+        const std::string data = gen_value(id, g_val_size);
         LOGTRACE("Inserting {}", id);
+
+        std::set< uint32_t >::iterator it;
+        bool expected_insert{true};
+        if (m_maintain_shadow) { std::tie(it, expected_insert) = m_existing_keys.insert(id); }
+
         auto status = m_cache->update(std::make_shared< Entry >(id, data));
-        ASSERT_EQ(status, expected_insert ? SimpleCacheStatus::not_found : SimpleCacheStatus::success)
-            << "Mismatch about existence of key=" << id << " between shadow_map and cache";
+        if (m_maintain_shadow) {
+            ASSERT_EQ(status, expected_insert ? SimpleCacheStatus::not_found : SimpleCacheStatus::success)
+                << "Mismatch about existence of key=" << id << " between shadow_map and cache";
+        }
 
         if (status == SimpleCacheStatus::not_found) {
             status = m_cache->insert(std::make_shared< Entry >(id, data));
-            ASSERT_EQ(status, SimpleCacheStatus::success)
-                << "Mismatch about existence of key=" << id << " between shadow_map and cache";
+            if (m_maintain_shadow) {
+                ASSERT_EQ(status, SimpleCacheStatus::success)
+                    << "Mismatch about existence of key=" << id << " between shadow_map and cache";
+            }
+            ++m_num_cache_entries;
         }
+        ++m_nwrite_ops;
     }
 
-    void read(uint32_t id) {
-        const auto it = m_shadow_map.find(id);
-        bool expected_found = (it != m_shadow_map.end());
+    void read(uint32_t id, bool insert_if_missing = false) {
+        bool expected_found{true};
+        if (m_maintain_shadow) { expected_found = (m_existing_keys.find(id) != m_existing_keys.end()); }
 
         LOGTRACE("Getting {}", id);
         std::shared_ptr< Entry > e = std::make_shared< Entry >(0);
         auto status = m_cache->get(id, e);
         if (status == SimpleCacheStatus::success) {
-            ASSERT_EQ(expected_found, true) << "Object key=" << id << " is deleted, but still found in cache";
-            ASSERT_EQ(e->m_contents, it->second) << "Contents for key=" << id << " mismatch";
+            if (m_maintain_shadow) {
+                ASSERT_EQ(expected_found, true) << "Object key=" << id << " is deleted, but still found in cache";
+            }
+            ASSERT_TRUE(validate_value(id, e->m_contents)) << "Contents for key=" << id << " mismatch";
             ++m_cache_hits;
-        } else if (expected_found) {
-            bool inserted = (m_cache->insert(std::make_shared< Entry >(id, it->second)) == SimpleCacheStatus::success);
-            ASSERT_EQ(inserted, true) << "Unable to insert to the cache for key=" << id;
+        } else {
             ++m_cache_misses;
+            if (insert_if_missing) { write(id); }
         }
+        ++m_nread_ops;
     }
 
     void remove(uint32_t id) {
-        const auto it = m_shadow_map.find(id);
-        bool expected_found = (it != m_shadow_map.end());
+        std::set< uint32_t >::iterator it;
+        bool expected_found{true};
+
+        if (m_maintain_shadow) {
+            it = m_existing_keys.find(id);
+            expected_found = (it != m_existing_keys.end());
+        }
 
         std::shared_ptr< Entry > removed_e = std::make_shared< Entry >(0);
         LOGTRACE("Removing {}", id);
         bool removed = (m_cache->remove(id, removed_e) == SimpleCacheStatus::success);
         if (removed) {
-            ASSERT_EQ(expected_found, true)
-                << "Object for key=" << id << " is deleted already, but still found in cache";
-            ASSERT_EQ(removed_e->m_contents, it->second) << "Contents for key=" << id << " mismatch prior to removal";
-            ++m_cache_hits;
+            if (m_maintain_shadow) {
+                ASSERT_EQ(expected_found, true)
+                    << "Object for key=" << id << " is deleted already, but still found in cache";
+            }
+            ASSERT_TRUE(validate_value(id, removed_e->m_contents))
+                << "Contents for key=" << id << " mismatch prior to removal";
+            --m_num_cache_entries;
         } else {
-            ++m_cache_misses;
+            if (m_maintain_shadow) {
+                ASSERT_EQ(expected_found, false)
+                    << "Object for key=" << id << " is present in shadow, but not in cache";
+            }
         }
 
-        m_shadow_map.erase(id);
+        if (m_maintain_shadow) { m_existing_keys.erase(id); }
+        ++m_nremove_ops;
     }
 };
 
 VENUM(op_t, uint8_t, READ = 0, WRITE = 1, REMOVE = 2)
 
-TEST_F(SimpleCacheTest, RandomData) {
+TEST_F(SimpleCacheTest, SingleThreadedCacheOps) {
+    this->m_maintain_shadow = true;
+
     static std::uniform_int_distribution< uint8_t > op_generator{0, 2};
-    static std::uniform_int_distribution< uint32_t > key_generator{0, this->m_total_keys};
+    static std::uniform_int_distribution< uint32_t > key_generator{0, this->m_max_cached_keys};
 
-    uint32_t nread_ops{0};
-    uint32_t nwrite_ops{0};
-    uint32_t nremove_ops{0};
-
-    auto num_iters = SISL_OPTIONS["num_iters"].as< uint32_t >();
-    LOGINFO("INFO: Do random read/write operations on all chunks for {} iters", num_iters);
-    for (uint32_t i{0}; i < num_iters; ++i) {
+    auto const num_ops = SISL_OPTIONS["num_ops"].as< uint32_t >();
+    LOGINFO("INFO: Do random read/write operations on all chunks for {} iters", num_ops);
+    for (uint32_t i{0}; i < num_ops; ++i) {
         const op_t op = s_cast< op_t >(op_generator(g_re));
         const uint32_t id = key_generator(g_re);
 
-        LOGDEBUG("INFO: Doing op={} for key=({})", enum_name(op), id);
         switch (op) {
         case op_t::READ:
             read(id);
-            ++nread_ops;
             break;
         case op_t::WRITE:
             write(id);
-            ++nwrite_ops;
             break;
         case op_t::REMOVE:
             remove(id);
-            ++nremove_ops;
             break;
         }
     }
-    const auto cache_ops = m_cache_hits + m_cache_misses;
-    LOGINFO("Executed read_ops={}, write_ops={} remove_ops={}", nread_ops, nwrite_ops, nremove_ops);
-    LOGINFO("Cache hits={} ({}%) Cache Misses={} ({}%)", m_cache_hits, (100 * (double)m_cache_hits) / cache_ops,
-            m_cache_misses, (100 * (double)m_cache_misses) / cache_ops);
+    LOGINFO("Executed read_ops={}, write_ops={} remove_ops={}", m_nread_ops.load(), m_nwrite_ops.load(),
+            m_nremove_ops.load());
+    LOGINFO("ReadCacheHits={} ({}%) ReadCacheMisses={} ({}%) Evicted={} CacheEntryCount={}", m_cache_hits.load(),
+            (100 * (double)m_cache_hits.load()) / m_nread_ops.load(), m_cache_misses.load(),
+            (100 * (double)m_cache_misses.load()) / m_nread_ops.load(), m_eviction_count.load(),
+            m_num_cache_entries.load());
 }
 
-TEST_F(SimpleCacheTest, MultiThreaded) {
+TEST_F(SimpleCacheTest, MultithreadedEviction) {
+    this->m_maintain_shadow = false;
+
+    static std::uniform_int_distribution< uint8_t > op_generator{0, 99};
+    static std::uniform_int_distribution< uint32_t > key_generator{0, this->m_max_keys};
+
+    // First preload entries to fill the cache
+    auto const num_threads = SISL_OPTIONS["num_threads"].as< uint32_t >();
+    std::vector< std::thread > threads;
+    uint32_t start_key{0};
+    for (uint32_t t{0}; t < num_threads; ++t) {
+        auto count = m_max_cached_keys / num_threads;
+        if (t == 0) { count += m_max_cached_keys % num_threads; }
+        threads.emplace_back([this, start_key, count]() {
+            for (uint32_t i{start_key}; i < start_key + count; ++i) {
+                write(i);
+                ASSERT_LE(r_cast< LRUEvictor* >(m_evictor.get())->filled_size(), m_evictor->max_size())
+                    << "Cache size exceeded its limits";
+            }
+        });
+        start_key += count;
+    }
+    for (auto& t : threads) {
+        t.join();
+    }
+    threads.clear();
+    LOGINFO("Preloaded {} entries, Evicted {} entries in {} threads", m_num_cache_entries.load(),
+            m_eviction_count.load(), num_threads);
+
+    m_nwrite_ops = 0;
+    auto const num_ops = SISL_OPTIONS["num_ops"].as< uint32_t >();
+    LOGINFO("INFO: Do random read/write operations on all chunks for {} iters", num_ops);
+    for (uint32_t t{0}; t < num_threads; ++t) {
+        auto count = num_ops / num_threads;
+        if (t == 0) { count += num_ops % num_threads; }
+
+        threads.emplace_back([this, count]() {
+            for (uint32_t i{0}; i < count; ++i) {
+                uint8_t op_val = op_generator(g_re);
+                const uint32_t id = key_generator(g_re);
+                if (op_val < 25) { // 25% write, 60% reads, 15% removes
+                    write(id);
+                } else if (op_val < 85) {
+                    read(id, /*insert_if_missing=*/true);
+                } else {
+                    remove(id);
+                }
+            }
+        });
+    }
+    for (auto& t : threads) {
+        t.join();
+    }
+    LOGINFO("Executed read_ops={}, write_ops={} remove_ops={} in {} threads", m_nread_ops.load(), m_nwrite_ops.load(),
+            m_nremove_ops.load(), num_threads);
+    LOGINFO("ReadCacheHits={} ({}%) ReadCacheMisses={} ({}%) Evicted={} CacheEntryCount={}", m_cache_hits.load(),
+            (100 * (double)m_cache_hits.load()) / m_nread_ops.load(), m_cache_misses.load(),
+            (100 * (double)m_cache_misses.load()) / m_nread_ops.load(), m_eviction_count.load(),
+            m_num_cache_entries.load());
+}
+
+#if 0
+TEST_F(SimpleCacheTest, MultiThreadedWithEviction) {
     const auto num_threads = 20;
     LOGINFO("INFO: Do random read/write operations on all chunks for {} threads", num_threads);
     std::vector< std::thread > threads;
     for (uint32_t i{0}; i < num_threads; ++i) {
         threads.emplace_back([this]() {
             for (uint32_t j{0}; j < 20000; ++j) {
-                const uint32_t id = g_re() % m_total_keys;
+                const uint32_t id = g_re() % m_max_cached_keys;
                 const op_t op = s_cast< op_t >(g_re() % 3);
                 std::shared_ptr< Entry > e = std::make_shared< Entry >(0);
                 switch (op) {
@@ -211,7 +312,30 @@ TEST_F(SimpleCacheTest, MultiThreaded) {
             }
         });
     }
-    for (auto& t : threads) { t.join(); }
+
+    for (uint32_t i{0}; i < num_threads; ++i) {
+        threads.emplace_back([this]() {
+            for (uint32_t j{0}; j < 20000; ++j) {
+                const uint32_t id = g_re() % m_max_cached_keys;
+                const op_t op = s_cast< op_t >(g_re() % 3);
+                std::shared_ptr< Entry > e = std::make_shared< Entry >(0);
+                switch (op) {
+                case op_t::READ:
+                    m_cache->get(id, e);
+                    break;
+                case op_t::WRITE:
+                    m_cache->insert(std::make_shared< Entry >(id, fmt::format("test{}", j)));
+                    break;
+                case op_t::REMOVE:
+                    m_cache->remove(id, e);
+                    break;
+                }
+            }
+        });
+    }
+    for (auto& t : threads) {
+        t.join();
+    }
 }
 
 TEST(SimpleCacheSize, TriggerEvict) {
@@ -220,71 +344,37 @@ TEST(SimpleCacheSize, TriggerEvict) {
     uint32_t cache_size = g_val_size * num_partitions * max_nodes_per_partition;
     std::shared_ptr< Evictor > evictor = std::make_unique< LRUEvictor >(cache_size, num_partitions);
     auto simple_cache = std::make_unique< SimpleCache< uint32_t, std::shared_ptr< Entry > > >(
-        evictor,                                                             // Evictor to evict used entries
-            10000,                                                     // Total number of buckets
-            g_val_size,                                                            // Value size
-            [](const std::shared_ptr< Entry >& e) -> uint32_t { return e->m_id; }, // Method to extract key
-            nullptr                                                                // Method to prevent eviction
-        );
-        auto* evictor_ptr = dynamic_cast<LRUEvictor*>(evictor.get());
+        evictor,                                                               // Evictor to evict used entries
+        10000,                                                                 // Total number of buckets
+        g_val_size,                                                            // Value size
+        [](const std::shared_ptr< Entry >& e) -> uint32_t { return e->m_id; }, // Method to extract key
+        nullptr                                                                // Method to prevent eviction
+    );
+    auto* evictor_ptr = dynamic_cast< LRUEvictor* >(evictor.get());
     uint32_t num_iters = num_partitions * max_nodes_per_partition * 1000;
-    for(uint32_t i = 0; i < num_iters; i++) {
+    for (uint32_t i = 0; i < num_iters; i++) {
         ASSERT_TRUE(simple_cache->insert(std::make_shared< Entry >(i, fmt::format("test{}", i))));
         ASSERT_LE(evictor_ptr->filled_size(), cache_size);
     }
     uint32_t cache_hits{0};
-    for(uint32_t i = 0; i < num_iters; i++) {
+    for (uint32_t i = 0; i < num_iters; i++) {
         std::shared_ptr< Entry > e = std::make_shared< Entry >(0);
-        if(simple_cache->get(i, e)) {
-            ++cache_hits;
-        }
+        if (simple_cache->get(i, e)) { ++cache_hits; }
     }
 }
 
-TEST(SimpleCacheSize, MultithreadedEviction) {
-    uint32_t num_partitions = 10;
-    uint32_t max_nodes_per_partition = 3;
-    uint32_t cache_size = g_val_size * num_partitions * max_nodes_per_partition;
-    std::shared_ptr< Evictor > evictor = std::make_unique< LRUEvictor >(cache_size, num_partitions);
-    auto simple_cache = std::make_unique< SimpleCache< uint32_t, std::shared_ptr< Entry > > >(
-            evictor,                                                             // Evictor to evict used entries
-            10000,                                                     // Total number of buckets
-            g_val_size,                                                            // Value size
-            [](const std::shared_ptr< Entry >& e) -> uint32_t { return e->m_id; }, // Method to extract key
-            nullptr                                                                // Method to prevent eviction
-        );
-    auto* evictor_ptr = dynamic_cast<LRUEvictor*>(evictor.get());
-    uint32_t num_iters = num_partitions * max_nodes_per_partition * 1000;
-    std::vector< std::thread > threads;
-    const auto num_writers = 10;
-    for (uint32_t i{0}; i < num_writers; ++i) {
-        threads.emplace_back([&simple_cache, &evictor_ptr, num_iters]() {
-            for (uint32_t j{0}; j < num_iters; ++j) {
-                simple_cache->insert(std::make_shared< Entry >(j, fmt::format("test{}", j)));
-                ASSERT_LE(evictor_ptr->filled_size(), evictor_ptr->max_size());
-            }
-        });
-    }
-    const auto num_readers = 10;
-    for (uint32_t i{0}; i < num_readers; ++i) {
-        threads.emplace_back([&simple_cache, num_iters]() {
-            for (uint32_t j{0}; j < num_iters; ++j) {
-                std::shared_ptr< Entry > e = std::make_shared< Entry >(0);
-                simple_cache->get(j, e);
-            }
-        });
-    }
-    for (auto& t : threads) { t.join(); }
-}
+#endif
 
 SISL_OPTIONS_ENABLE(logging, test_simplecache)
 SISL_OPTION_GROUP(test_simplecache,
-                  (cache_size_mb, "", "cache_size_mb", "cache size in mb",
+                  (store_size_mb, "", "store_size_mb", "Store size in mb to simulate",
                    ::cxxopts::value< uint32_t >()->default_value("100"), "number"),
-                  (cache_pct, "", "cache_pct", "percentage of cache",
-                   ::cxxopts::value< uint32_t >()->default_value("50"), "number"),
-                  (num_iters, "", "num_iters", "number of iterations for rand ops",
-                   ::cxxopts::value< uint32_t >()->default_value("65536"), "number"))
+                  (cache_pct, "", "cache_pct", "percentage of data is cached",
+                   ::cxxopts::value< uint32_t >()->default_value("5"), "number"),
+                  (num_ops, "", "num_ops", "number of iterations for rand ops",
+                   ::cxxopts::value< uint32_t >()->default_value("65536"), "number"),
+                  (num_threads, "", "num_threads", "number of threads for multi-threaded tests",
+                   ::cxxopts::value< uint32_t >()->default_value("8"), "number"))
 
 int main(int argc, char* argv[]) {
     ::testing::InitGoogleTest(&argc, argv);

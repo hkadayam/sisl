@@ -249,7 +249,7 @@ public:
 
     bool update(const K& input_key, auto&& update_cb) {
 #ifndef GLOBAL_HASHSET_LOCK
-        folly::SharedMutexWritePriority::ReadHolder holder(m_lock);
+        folly::SharedMutexWritePriority::WriteHolder holder(m_lock);
 #endif
         bool found{false};
         for (auto& n : m_list) {

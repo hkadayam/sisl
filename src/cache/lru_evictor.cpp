@@ -78,22 +78,24 @@ void LRUEvictor::LRUPartition::record_resized(const CacheRecord& record, uint32_
 
 bool LRUEvictor::LRUPartition::find_evict_candidates(uint32_t record_fid, uint32_t needed_size) {
     size_t count{0};
+    size_t size_gained{0};
 
     auto it = std::begin(m_list);
-    while (will_fill(needed_size) && (it != std::end(m_list))) {
+    while ((size_gained < needed_size) && (it != std::end(m_list))) {
         CacheRecord& rec = *it;
         if (rec.is_pinned() || !m_evictor->do_evict_cb(record_fid)(rec)) {
             ++count;
         } else {
             // We are evicting this record, do a soft delete now so that it can get cleaned up by the
             // caller later, but when we encounter the record we treat it as not found.
+            size_gained += rec.size();
             rec.invalidate();
         }
         it = std::next(it);
     }
 
     if (count) { LOGDEBUG("LRU ejection had to skip {} entries", count); }
-    if (is_full()) {
+    if (size_gained < needed_size) {
         // No available candidate to evict
         LOGERROR("No cache space available: Eviction partition={} as total_entries={} rejected eviction request to add "
                  "size={}, already filled={}",
