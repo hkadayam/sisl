@@ -28,13 +28,9 @@ typedef ValueEntryBase CacheRecord;
 
 class Evictor {
 public:
-    typedef std::function< bool(const CacheRecord&) > eviction_cb_t;
-    using can_evict_cb_t = eviction_cb_t;
+    using do_evict_cb_t = std::function< bool(const CacheRecord&) >;
 
     // struct to hold the eviction callbacks for each record family
-    // can_evict_cb: called before eviction to check if the record can be evicted.
-    // post_eviction_cb: called after eviction to do any cleanup. If this returns false, the record is reinserted.
-    // and we try to evict the next record.
     struct RecordFamily {
         bool registered{false};
         Evictor::do_evict_cb_t do_evict_cb{nullptr};
@@ -48,13 +44,13 @@ public:
     Evictor& operator=(Evictor&&) noexcept = delete;
     virtual ~Evictor() = default;
 
-    uint32_t register_record_family(RecordFamily record_family) {
     uint32_t register_record_family(RecordFamily family) {
         uint32_t id{0};
         std::unique_lock lk(m_reg_mtx);
-        while (id < m_eviction_cbs.size()) {
-            if (m_eviction_cbs[id].first == false) {
-                m_eviction_cbs[id] = std::make_pair(true, record_family);
+        while (id < m_record_families.size()) {
+            if (m_record_families[id].registered == false) {
+                m_record_families[id] = std::move(family);
+                m_record_families[id].registered = true;
                 return id;
             }
             ++id;
@@ -65,7 +61,6 @@ public:
 
     void unregister_record_family(uint32_t record_type_id) {
         std::unique_lock lk(m_reg_mtx);
-        m_eviction_cbs[record_type_id] = std::make_pair(false, RecordFamily{});
         m_record_families[record_type_id].registered = false;
         m_record_families[record_type_id].do_evict_cb = nullptr;
     }
@@ -77,8 +72,6 @@ public:
 
     int64_t max_size() const { return m_max_size; }
     uint32_t num_partitions() const { return m_num_partitions; }
-    const eviction_cb_t& can_evict_cb(const uint32_t record_id) const { return m_eviction_cbs[record_id].second.can_evict_cb; }
-    const eviction_cb_t& post_eviction_cb(const uint32_t record_id) const { return m_eviction_cbs[record_id].second.post_eviction_cb; }
     const do_evict_cb_t& do_evict_cb(uint32_t record_id) const { return m_record_families[record_id].do_evict_cb; }
 
 private:
@@ -86,7 +79,6 @@ private:
     uint32_t m_num_partitions;
 
     std::mutex m_reg_mtx;
-    std::array< std::pair< bool /*registered*/, RecordFamily >, CacheRecord::max_record_families() > m_eviction_cbs;
     std::array< RecordFamily, CacheRecord::max_record_families() > m_record_families;
 };
 } // namespace sisl

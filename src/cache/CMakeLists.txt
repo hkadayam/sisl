@@ -30,4 +30,4 @@ target_sources(test_simple_cache PRIVATE
   )
 target_include_directories(test_simple_cache BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(test_simple_cache sisl_cache GTest::gtest)
-add_test(NAME SimpleCache COMMAND test_simple_cache --num_iters 1000)
+add_test(NAME SimpleCache COMMAND test_simple_cache)

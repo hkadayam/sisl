@@ -49,7 +49,7 @@ using key_extractor_cb_t = std::function< K(const V&) >;
 
 static constexpr size_t s_start_seed = 0; // TODO: Pickup a better seed
 
-///////////////////////////////////////////// RangeHashMap Declaration ///////////////////////////////////
+///////////////////////////////////////////// SimpleHashMap Declaration ///////////////////////////////////
 template < typename K, typename V >
 class SimpleHashMap {
 private:
@@ -73,7 +73,6 @@ public:
     bool upsert(const K& key, const V& value);
     bool get(const K& input_key, V& out_val);
     bool erase(const K& key, V& out_val);
-    bool try_erase(const K& key);
     bool update(const K& key, auto&& update_cb);
     bool upsert_or_delete(const K& key, auto&& update_or_delete_cb);
     K record_to_key(const ValueEntryBase& record);
@@ -269,30 +268,6 @@ public:
 private:
     static void access_cb(const SingleEntryHashNode< V >& node, const K& key, const V& value, hash_op_t op) {
         SimpleHashMap< K, V >::call_access_cb((const ValueEntryBase&)node, key, value, op);
-    }
-
-    bool erase_unsafe(const K& input_key, V& out_val, bool call_access_cb) {
-        SingleEntryHashNode< V >* n = nullptr;
-
-        auto it = m_list.begin();
-        for (auto itend{m_list.end()}; it != itend; ++it) {
-            const K k = SimpleHashMap< K, V >::extractor_cb()(it->m_value);
-            if (input_key > k) {
-                break;
-            } else if (input_key == k) {
-                n = &*it;
-                break;
-            }
-        }
-
-        if (n) {
-            if (call_access_cb) { access_cb(*n, input_key, hash_op_t::DELETE); }
-            out_val = n->m_value;
-            m_list.erase(it);
-            delete n;
-            return true;
-        }
-        return false;
     }
 };
 
