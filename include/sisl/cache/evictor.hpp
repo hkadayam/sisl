@@ -30,6 +30,7 @@ class Evictor {
 public:
     using do_evict_cb_t = std::function< bool(const CacheRecord&) >;
 
+    // struct to hold the eviction callbacks for each record family
     struct RecordFamily {
         bool registered{false};
         Evictor::do_evict_cb_t do_evict_cb{nullptr};

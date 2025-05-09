@@ -49,7 +49,7 @@ using key_extractor_cb_t = std::function< K(const V&) >;
 
 static constexpr size_t s_start_seed = 0; // TODO: Pickup a better seed
 
-///////////////////////////////////////////// RangeHashMap Declaration ///////////////////////////////////
+///////////////////////////////////////////// SimpleHashMap Declaration ///////////////////////////////////
 template < typename K, typename V >
 class SimpleHashMap {
 private:
@@ -248,7 +248,7 @@ public:
 
     bool update(const K& input_key, auto&& update_cb) {
 #ifndef GLOBAL_HASHSET_LOCK
-        folly::SharedMutexWritePriority::ReadHolder holder(m_lock);
+        folly::SharedMutexWritePriority::WriteHolder holder(m_lock);
 #endif
         bool found{false};
         for (auto& n : m_list) {
@@ -271,7 +271,7 @@ private:
     }
 };
 
-///////////////////////////////////////////// RangeHashMap Definitions ///////////////////////////////////
+///////////////////////////////////////////// SimpleHashMap Definitions ///////////////////////////////////
 template < typename K, typename V >
 SimpleHashMap< K, V >::SimpleHashMap(uint32_t nBuckets, const key_extractor_cb_t< K, V >& extract_cb,
                                      kv_access_cb_t< K, V > access_cb) :

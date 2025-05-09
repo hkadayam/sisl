@@ -9,7 +9,7 @@ required_conan_version = ">=1.60.0"
 
 class SISLConan(ConanFile):
     name = "sisl"
-    version = "13.3.1"
+    version = "13.3.2"
 
     homepage = "https://github.com/hkadayam/sisl"
     description = "Library for fast data structures, utilities"
@@ -113,7 +113,12 @@ class SISLConan(ConanFile):
 
     def layout(self):
         self.folders.source = "."
-        self.folders.build = join("build", str(self.settings.build_type))
+        if self.options.get_safe("sanitize"):
+            self.folders.build = join("build", "Sanitized")
+        elif self.options.get_safe("coverage"):
+            self.folders.build = join("build", "Coverage")
+        else:
+            self.folders.build = join("build", str(self.settings.build_type))
         self.folders.generators = join(self.folders.build, "generators")
 
         self.cpp.build.components["options"].libdirs = ["src/options"]
