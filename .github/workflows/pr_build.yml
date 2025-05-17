@@ -23,6 +23,8 @@ jobs:
           - build-type: Debug
             tooling: None
           - build-type: Debug
+            tooling: Coverage
+          - build-type: Debug
             malloc-impl: tcmalloc
           - build-type: Release
             malloc-impl: libc

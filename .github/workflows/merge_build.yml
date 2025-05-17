@@ -38,7 +38,7 @@ jobs:
       malloc-impl: ${{ matrix.malloc-impl }}
       prerelease: ${{ matrix.prerelease }}
       tooling: ${{ matrix.tooling }}
-      testing: 'False'
+      testing: ${{ matrix.tooling == 'Coverage' }}
   ChainBuild:
     runs-on: "ubuntu-22.04"
     steps:

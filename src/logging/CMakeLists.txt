@@ -23,8 +23,11 @@ target_sources(sisl_logging PRIVATE
 )
 target_link_libraries(sisl_logging PUBLIC ${LOGGING_DEPS} -rdynamic)
 
-add_executable(logging_example_v2)
-target_sources(logging_example_v2 PRIVATE
-  test/example_v2.cpp
-  )
-target_link_libraries(logging_example_v2 ${LOGGING_DEPS} sisl_logging)
+if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
+  add_executable(logging_example_v2)
+  target_sources(logging_example_v2 PRIVATE
+    test/example_v2.cpp
+    )
+  target_link_libraries(logging_example_v2 ${LOGGING_DEPS} sisl_logging)
+  add_test(NAME LoggingExampleV2 COMMAND logging_example_v2)
+endif()

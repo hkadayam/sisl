@@ -13,4 +13,6 @@ target_link_libraries(sisl_grpc PUBLIC
   gRPC::grpc++
   )
 
-add_subdirectory(tests)
+if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

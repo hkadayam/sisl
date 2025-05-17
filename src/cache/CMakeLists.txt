@@ -24,10 +24,12 @@ target_link_libraries(sisl_cache PUBLIC
 #target_link_libraries(test_range_cache sisl_cache GTest::gtest)
 #add_test(NAME RangeCache COMMAND test_range_cache --num_iters 1000)
 
-add_executable(test_simple_cache)
-target_sources(test_simple_cache PRIVATE
-  tests/test_simple_cache.cpp
-  )
-target_include_directories(test_simple_cache BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(test_simple_cache sisl_cache GTest::gtest)
-add_test(NAME SimpleCache COMMAND test_simple_cache)
+if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
+  add_executable(test_simple_cache)
+  target_sources(test_simple_cache PRIVATE
+    tests/test_simple_cache.cpp
+    )
+  target_include_directories(test_simple_cache BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(test_simple_cache sisl_cache GTest::gtest)
+  add_test(NAME SimpleCache COMMAND test_simple_cache)
+endif()

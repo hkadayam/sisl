@@ -19,22 +19,24 @@ target_link_libraries(flip PUBLIC
           nlohmann_json::nlohmann_json
         )
 
-add_executable(test_flip)
-target_sources(test_flip PRIVATE
-    lib/test_flip.cpp
-  )
-target_link_libraries(test_flip flip cxxopts::cxxopts)
-add_test(NAME Flip COMMAND test_flip)
+if(NOT DEFINED BUILD_TESTING OR BUILD_TESTING)
+  add_executable(test_flip)
+  target_sources(test_flip PRIVATE
+      lib/test_flip.cpp
+    )
+  target_link_libraries(test_flip flip cxxopts::cxxopts)
+  add_test(NAME Flip COMMAND test_flip)
 
-add_executable(test_flip_server)
-target_sources(test_flip_server PRIVATE
-    lib/test_flip_server.cpp
-  )
-target_link_libraries(test_flip_server flip cxxopts::cxxopts)
+  add_executable(test_flip_server)
+  target_sources(test_flip_server PRIVATE
+      lib/test_flip_server.cpp
+    )
+  target_link_libraries(test_flip_server flip cxxopts::cxxopts)
 
-add_executable(test_flip_local_client)
-target_sources(test_flip_local_client PRIVATE
-    client/local/test_flip_local_client.cpp
-  )
-target_link_libraries(test_flip_local_client flip cxxopts::cxxopts)
-add_test(NAME FlipLocalClient COMMAND test_flip_local_client)
+  add_executable(test_flip_local_client)
+  target_sources(test_flip_local_client PRIVATE
+      client/local/test_flip_local_client.cpp
+    )
+  target_link_libraries(test_flip_local_client flip cxxopts::cxxopts)
+  add_test(NAME FlipLocalClient COMMAND test_flip_local_client)
+endif()
