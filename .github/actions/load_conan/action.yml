@@ -42,7 +42,7 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: |
-          ~/.conan/data
+          ~/.conan2/p
         key: ${{ inputs.key_prefix }}-${{ hashFiles(steps.hash-key-primary.outputs.key, steps.hash-key-3rd.outputs.keys) }}
         fail-on-cache-miss: ${{ inputs.fail_on_cache_miss }}
 
@@ -50,7 +50,7 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: |
-          ~/.conan/data
+          ~/.conan2/p
         key: ${{ inputs.key_prefix }}-${{ hashFiles(steps.hash-key-primary.outputs.key, steps.hash-key-3rd.outputs.keys) }}
         restore-keys: ${{ inputs.key_prefix }}-
       if: ${{ steps.restore-cache.outputs.cache-hit != 'true' && (( github.event_name == 'pull_request' && inputs.testing == 'True' ) || ( inputs.load_any == 'True' )) }}
