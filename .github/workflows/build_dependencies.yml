@@ -28,6 +28,10 @@ on:
         required: false
         type: string
         default: 'False'
+      deps-only:
+        required: false
+        type: string
+        default: 'False'
   workflow_dispatch:
     inputs:
       platform:
@@ -80,6 +84,14 @@ on:
           - 'True'
           - 'False'
         default: 'True'
+      deps-only:
+        description: 'Should only load dependencies'
+        required: true
+        type: choice
+        options:
+         - 'True'
+         - 'False'
+        default: 'False'
 
 jobs:
   BuildSisl:
@@ -135,7 +147,7 @@ jobs:
     - name: Create and Test Package
       run: |
         sanitize=$([[ "${{ inputs.tooling }}" == "Sanitize" ]] && echo "True" || echo "False")
-        skip_test=$([[ "${{ inputs.testing }}" == "True" || ${{ inputs.testing }} == "true" ]] && echo "false" || echo "true") 
+        skip_test=$([[ "${{ inputs.testing }}" == "True" || ${{ inputs.testing }} == "true" ]] && echo "False" || echo "True") 
         conan create \
             -o "sisl/*:prerelease=${{ inputs.prerelease }}" \
             -o "sisl/*:malloc_impl=${{ inputs.malloc-impl }}" \
@@ -144,7 +156,7 @@ jobs:
             -c tools.build:skip_test=${skip_test} \
             --build missing \
             .
-      if: ${{ inputs.tooling != 'Coverage' }}
+      if: ${{ inputs.deps-only == 'False' && inputs.tooling != 'Coverage' }}
 
     - name: Code Coverage Run
       run: |
@@ -155,11 +167,11 @@ jobs:
             -s build_type=${{ inputs.build-type }} \
             --build missing \
             .
-      if: ${{ inputs.testing == 'True' && inputs.tooling == 'Coverage' }}
+      if: ${{ inputs.deps-only == 'False' && inputs.testing == 'True' && inputs.tooling == 'Coverage' }}
 
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@v4
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
         gcov: true
-      if: ${{ inputs.testing == 'True' && inputs.tooling == 'Coverage' }}
+      if: ${{ inputs.deps-only == 'False' && inputs.testing == 'True' && inputs.tooling == 'Coverage' }}

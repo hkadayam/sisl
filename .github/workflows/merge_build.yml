@@ -39,6 +39,7 @@ jobs:
       prerelease: ${{ matrix.prerelease }}
       tooling: ${{ matrix.tooling }}
       testing: ${{ matrix.tooling == 'Coverage' }}
+      deps-only : "False"
   ChainBuild:
     runs-on: "ubuntu-22.04"
     steps:
