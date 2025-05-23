@@ -7,7 +7,7 @@ inputs:
   key_prefix:
     description: 'Cache prefix'
     required: true
-    default: 'ForkDeps'
+    default: 'Deps'
   fail_on_cache_miss:
     description: 'Fail if key missing'
     required: false
@@ -30,7 +30,8 @@ runs:
     - id: hash-key-primary
       shell: bash
       run: |
-        echo "key=${{ inputs.path }}/conanfile.py" >> $GITHUB_OUTPUT
+        grep "self.requires" ${{ inputs.path }}/conanfile.py > ${{ inputs.path }}/conan_dependencies.txt
+        echo "key=${{ inputs.path }}/conan_dependencies.txt" >> $GITHUB_OUTPUT
 
     - id: hash-key-3rd
       shell: bash

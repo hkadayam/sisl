@@ -135,7 +135,7 @@ jobs:
     - name: Create and Test Package
       run: |
         sanitize=$([[ "${{ inputs.tooling }}" == "Sanitize" ]] && echo "True" || echo "False")
-        skip_test=$([[ "${{ inputs.testing }}" == "True" || ${{ inputs.testing }} == "true" ]] && echo "false" || echo "true") 
+        skip_test=$([[ "${{ inputs.testing }}" == "True" || ${{ inputs.testing }} == "true" ]] && echo "False" || echo "True") 
         conan create \
             -o "sisl/*:prerelease=${{ inputs.prerelease }}" \
             -o "sisl/*:malloc_impl=${{ inputs.malloc-impl }}" \
