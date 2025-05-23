@@ -1,9 +1,6 @@
 name: 'Load Conan Cache'
 description: 'Loads Local Conan Cache'
 inputs:
-  testing:
-    description: 'Support building tests'
-    required: true
   key_prefix:
     description: 'Cache prefix'
     required: true
@@ -46,13 +43,3 @@ runs:
           ~/.conan2/p
         key: ${{ inputs.key_prefix }}-${{ hashFiles(steps.hash-key-primary.outputs.key, steps.hash-key-3rd.outputs.keys) }}
         fail-on-cache-miss: ${{ inputs.fail_on_cache_miss }}
-
-    - name: Restore Testing Cache
-      uses: actions/cache/restore@v4
-      with:
-        path: |
-          ~/.conan2/p
-        key: ${{ inputs.key_prefix }}-${{ hashFiles(steps.hash-key-primary.outputs.key, steps.hash-key-3rd.outputs.keys) }}
-        restore-keys: ${{ inputs.key_prefix }}-
-      if: ${{ steps.restore-cache.outputs.cache-hit != 'true' && (( github.event_name == 'pull_request' && inputs.testing == 'True' ) || ( inputs.load_any == 'True' )) }}
-
