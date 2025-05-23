@@ -137,9 +137,9 @@ jobs:
         sanitize=$([[ "${{ inputs.tooling }}" == "Sanitize" ]] && echo "True" || echo "False")
         skip_test=$([[ "${{ inputs.testing }}" == "True" || ${{ inputs.testing }} == "true" ]] && echo "false" || echo "true") 
         conan create \
-            -o sisl:prerelease=${{ inputs.prerelease }} \
-            -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
-            -o sisl:sanitize=${sanitize} \
+            -o "sisl/*:prerelease=${{ inputs.prerelease }}" \
+            -o "sisl/*:malloc_impl=${{ inputs.malloc-impl }}" \
+            -o "sisl/*:sanitize=${sanitize}" \
             -s build_type=${{ inputs.build-type }} \
             -c tools.build:skip_test=${skip_test} \
             --build missing \
@@ -148,14 +148,13 @@ jobs:
 
     - name: Code Coverage Run
       run: |
-        conan install \
+        conan build \
             -o prerelease=${{ inputs.prerelease }} \
             -o malloc_impl=${{ inputs.malloc-impl }} \
             -o coverage=True \
             -s build_type=${{ inputs.build-type }} \
             --build missing \
             .
-        conan build .
       if: ${{ inputs.testing == 'True' && inputs.tooling == 'Coverage' }}
 
     - name: Upload coverage reports to Codecov
